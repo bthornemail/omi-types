@@ -19,7 +19,9 @@ Also carried from the earlier merge of the `omi` reference: `OMI.Bits`, `OMI.Del
 
 Not ported: the document's string `Grammar` record. Here the `Position` constructors are the grammar; the string patterns live in `boxedPINE/rosetta/src/grammar/grammar.ts`.
 
-⟦PLACEHOLDER⟧ The nibble layout of `positionWord` for `PLiteral` and `PStruct` is a proposal; see `OMI.Handler`.
+`OMI.Try` makes try / catch / finally total: an `Attempt` is either a tried value or a caught `Deviation` that carries the structured coordinate (position, expected, actual, difference). The difference is the repair, so a caught attempt is open for another try. BIOS paths start from the relation they are given and try the frame first.
+
+`PLiteral` and `PStruct` are coordinate nibbles: indices 0..15 into the first 16 indices of the buffer. Sixteen of them make the first 8 byte indices (`coordinateFrame`).
 
 ---
 

@@ -57,6 +57,8 @@ module OMI.Types
   , Weight(..)
     -- * Protocol
   , Protocol
+    -- * try / catch / finally
+  , Attempt(..)
   ) where
 
 import OMI.BIOS
@@ -74,4 +76,5 @@ import OMI.Protocol
 import OMI.Ruler
 import OMI.Torus
 import OMI.TruthGate (TruthGate)
+import OMI.Try (Attempt(..))
 import OMI.Wittgenstein (WittgensteinOperator)

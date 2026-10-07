@@ -19,6 +19,8 @@ module OMI.Handler
   , Kind(..)
   , Separator(..)
   , positionWord
+  , positionNibbles
+  , coordinateFrame
   , Deviation
   , deviation
   , deviationPosition
@@ -68,11 +70,10 @@ data Position
 --   Simple positions read their own word. @PDecimal a b@ reads as the low
 --   byte of @a@ then the low byte of @b@ (the document's @a * 256 + b@).
 --
---   ⟦PLACEHOLDER⟧ For @PLiteral@ and @PStruct@ the document packed host
---   character codes, which overlap. This port packs four nibbles instead:
---   PLiteral = a | radix | b | kind, PStruct = a | separator | b | radix,
---   keeping the same fields the document used. The author should confirm
---   the layout.
+--   @PLiteral@ and @PStruct@ are computed coordinate nibbles (author,
+--   2026-10-07): each field is an index 0..15 into the first 16 indices of
+--   the buffer. Their word is their first four nibbles; see
+--   'positionNibbles' for all of them.
 positionWord :: Position -> Word16
 positionWord (PPoint w) = w
 positionWord (PIndex w) = w
@@ -84,6 +85,34 @@ positionWord (PHex w) = w
 positionWord (PDecimal a b) = W16 (lowByte a) (lowByte b)
 positionWord (PLiteral a r b k) = W16 (B (lowNibble a) (radixNibble r)) (B (lowNibble b) (kindNibble k))
 positionWord (PStruct a s b r _ _) = W16 (B (lowNibble a) (separatorNibble s)) (B (lowNibble b) (radixNibble r))
+
+-- | The coordinate nibbles of a position. Simple positions give the four
+--   nibbles of their word; @PLiteral@ gives four (a, radix, b, kind) and
+--   @PStruct@ six (a, separator, b, radix, e, kind).
+positionNibbles :: Position -> [Nibble]
+positionNibbles (PLiteral a r b k) = [lowNibble a, radixNibble r, lowNibble b, kindNibble k]
+positionNibbles (PStruct a s b r e k) =
+  [lowNibble a, separatorNibble s, lowNibble b, radixNibble r, lowNibble e, kindNibble k]
+positionNibbles p = case positionWord p of
+  W16 (B n1 n2) (B n3 n4) -> [n1, n2, n3, n4]
+
+-- | The first 16 coordinate nibbles make the first 8 byte indices of the
+--   buffer: relation words a..d, in order. Missing nibbles are zero; any
+--   beyond sixteen are not part of the frame.
+--   ⟦PLACEHOLDER⟧ Which positions are laid into one frame, and in what
+--   order, is the author's to define.
+coordinateFrame :: [Nibble] -> Relation
+coordinateFrame ns = case take16 ns of
+  [n0, n1, n2, n3, n4, n5, n6, n7, n8, n9, n10, n11, n12, n13, n14, n15] ->
+    setW16d (setW16c (setW16b (setW16a nullRel (W16 (B n0 n1) (B n2 n3)))
+      (W16 (B n4 n5) (B n6 n7))) (W16 (B n8 n9) (B n10 n11))) (W16 (B n12 n13) (B n14 n15))
+  _ -> nullRel
+  where
+    take16 xs = go sixteen xs
+    go [] _ = []
+    go (_ : ks) [] = N O O O O : go ks []
+    go (_ : ks) (y : ys) = y : go ks ys
+    sixteen = [O, O, O, O, O, O, O, O, O, O, O, O, O, O, O, O]
 
 lowByte :: Word16 -> Byte
 lowByte (W16 _ lo) = lo

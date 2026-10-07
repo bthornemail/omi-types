@@ -34,6 +34,7 @@ library
       OMI.Stream
       OMI.Torus
       OMI.TruthGate
+      OMI.Try
       OMI.Types
       OMI.VCS
       OMI.Wittgenstein

@@ -25,6 +25,7 @@ import qualified OMI.Orbit as Orb
 import qualified OMI.Ruler as Ru
 import qualified OMI.Torus as T
 import qualified OMI.Types ()
+import qualified OMI.Try as Try
 import qualified Data.Bits as HostBits
 import OMI.Core
 import OMI.Kernel
@@ -57,7 +58,9 @@ main = do
   testQuadraticForms
   testTorusMetric
   testRulerFold
-  testBiosFromZero
+  testBiosTriesTheGivenRelation
+  testCaughtFrameRepairsForAnotherTry
+  testCoordinateNibbles
   testHandlerPositionTypes
 
 testGaugeOperators :: IO ()
@@ -585,16 +588,62 @@ testRulerFold =
   where
     wordRel n = Rel.setW16a nullRel (toW16 n)
 
--- As in the document: from the zero relation every gate path stays closed.
-testBiosFromZero :: IO ()
-testBiosFromZero = do
-  let paths = [ BIOS.mkGatePath BIOS.Endpoint5T BIOS.Endpoint10T [BIOS.Interior6T, BIOS.Interior8T]
-              , BIOS.mkGatePath BIOS.Endpoint5T BIOS.Endpoint5T []
-              ]
-      kernel = BIOS.mkBootKernel (BIOS.mkBIOS paths) []
-  case BIOS.bootClosed kernel of
+-- A relation whose diagonal (byte index 0) is the XOR of byte indices 2..7.
+framedRelation :: Relation
+framedRelation = Rel.setW16d (Rel.setW16c (Rel.setW16b (Rel.setW16a nullRel (toW16 diag)) (toW16 0x0102)) (toW16 0x0408)) (toW16 0x1020)
+  where diag = (1 `HostBits.xor` 2 `HostBits.xor` 4 `HostBits.xor` 8 `HostBits.xor` 0x10 `HostBits.xor` 0x20) * 256
+
+-- The same relation with a broken diagonal.
+unframedRelation :: Relation
+unframedRelation = Rel.setW16a framedRelation (toW16 0x0500)
+
+attemptName :: Try.Attempt a -> String
+attemptName (Try.Tried _) = "tried"
+attemptName (Try.Caught _) = "caught"
+
+-- Author's decision: a path starts from the relation it is given.
+testBiosTriesTheGivenRelation :: IO ()
+testBiosTriesTheGivenRelation = do
+  let path = BIOS.mkGatePath BIOS.Endpoint5T BIOS.Endpoint10T [BIOS.Interior6T]
+  assertEqualString "a framed relation was not tried" "tried" (attemptName (BIOS.executePath path framedRelation))
+  assertEqualString "an unframed relation was not caught" "caught" (attemptName (BIOS.executePath path unframedRelation))
+  case BIOS.executePath path framedRelation of
+    Try.Tried r -> assertHostFalse "the path did not run its gates" (fromW16 (Rel.relW16a r) == fromW16 (Rel.relW16a framedRelation))
+    Try.Caught _ -> fail "framed relation caught"
+  case BIOS.bootClosed (BIOS.mkBootKernel (BIOS.mkBIOS [path]) [nullRel]) of
     Rel.Tru -> pure ()
-    Rel.Fls -> fail "a BIOS path from zero did not close"
+    Rel.Fls -> fail "the zero relation is framed and should still close"
+  case BIOS.bootClosed (BIOS.mkBootKernel (BIOS.mkBIOS [path]) [unframedRelation]) of
+    Rel.Tru -> fail "a kernel with a caught path reported closed"
+    Rel.Fls -> pure ()
+
+-- The catch carries the structured coordinate; its difference is the repair.
+testCaughtFrameRepairsForAnotherTry :: IO ()
+testCaughtFrameRepairsForAnotherTry =
+  case Try.tryFrame unframedRelation of
+    Try.Tried _ -> fail "unframed relation was tried"
+    Try.Caught d -> do
+      let expected = 1 `HostBits.xor` 2 `HostBits.xor` 4 `HostBits.xor` 8 `HostBits.xor` 0x10 `HostBits.xor` 0x20
+      assertEqualInt "catch: expected is not the diagonal folded from 0" expected (fromW16 (H.deviationExpected d))
+      assertEqualInt "catch: actual is not what index 0 held" 0x05 (fromW16 (H.deviationActual d))
+      assertEqualInt "catch: difference is not expected xor actual" (expected `HostBits.xor` 0x05) (fromW16 (H.deviationDifference d))
+      assertEqualInt "finally: the witness is not the repair at index 0" (expected `HostBits.xor` 0x05) (fromW16 (Rel.relW16a (Try.finally (Try.Caught d))))
+      assertEqualString "another try after the repair was not tried" "tried"
+        (attemptName (Try.tryFrame (Try.repairFrame d unframedRelation)))
+
+-- PLiteral and PStruct are coordinate nibbles; sixteen make the first 8 byte indices.
+testCoordinateNibbles :: IO ()
+testCoordinateNibbles = do
+  let lit = H.PLiteral (toW16 3) H.RadixX (toW16 4) H.KindN
+      struct = H.PStruct (toW16 1) H.SepDot (toW16 2) H.RadixB (toW16 7) H.KindI
+      frame = H.coordinateFrame (H.positionNibbles lit ++ H.positionNibbles struct ++ H.positionNibbles (H.PPoint (toW16 0xABCD)))
+  assertEqualInt "PLiteral does not give four nibbles" 4 (length (H.positionNibbles lit))
+  assertEqualInt "PStruct does not give six nibbles" 6 (length (H.positionNibbles struct))
+  assertHostTrue "the frame is not the nibbles in order across words a..d"
+    (map fromW16 [Rel.relW16a frame, Rel.relW16b frame, Rel.relW16c frame, Rel.relW16d frame]
+       == [0x3242, 0x1120, 0x71AB, 0xCD00])
+  assertHostTrue "the frame wrote beyond the first 8 byte indices"
+    (map fromW16 [Rel.relW16e frame, Rel.relW16f frame, Rel.relW16g frame, Rel.relW16h frame] == [0, 0, 0, 0])
 
 testHandlerPositionTypes :: IO ()
 testHandlerPositionTypes = do

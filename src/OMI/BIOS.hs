@@ -11,6 +11,12 @@
 --   law with the word as its own correction, the 5T endpoint only reads,
 --   and the 10T endpoint reads and drives. The document ignores the start
 --   endpoint, and so does this port.
+--
+--   Author's decision (2026-10-07): a path starts from the relation it is
+--   given, not from zero. Before any gate runs, the frame is tried
+--   ("OMI.Try"): if the relation is not structured right, the path is
+--   caught with the proper structure computed from 0, and the caller can
+--   repair and try again.
 module OMI.BIOS
   ( Endpoint(..)
   , Interior(..)
@@ -23,14 +29,16 @@ module OMI.BIOS
   , reset
   , executePath
   , boot
+  , runKernel
   , bootClosed
   ) where
 
-import OMI.Core (nullRel, null16)
+import OMI.Core (null16)
 import OMI.Delta (delta)
 import OMI.Handler (relationClosed)
 import OMI.Kernel
 import OMI.Relation
+import OMI.Try
 
 data Endpoint = Endpoint5T | Endpoint10T
 
@@ -55,29 +63,40 @@ mkBootKernel = BootKernel
 reset :: Word16
 reset = null16
 
--- | Run one path from the zero relation.
-executePath :: GatePath -> Relation
-executePath (GatePath _ end interiors) = applyEndpoint end (applyAll nullRel interiors)
+-- | Try one path from a given relation: frame first, then the gates.
+executePath :: GatePath -> Relation -> Attempt Relation
+executePath (GatePath _ end interiors) r =
+  andThen (tryFrame r) (\framed -> Tried (applyEndpoint end (applyAll framed interiors)))
   where
-    applyAll r [] = r
-    applyAll r (_ : gs) = applyAll (advanceSelf r) gs
-    applyEndpoint Endpoint5T r = r
-    applyEndpoint Endpoint10T r = advanceSelf r
+    applyAll x [] = x
+    applyAll x (_ : gs) = applyAll (advanceSelf x) gs
+    applyEndpoint Endpoint5T x = x
+    applyEndpoint Endpoint10T x = advanceSelf x
 
--- | Every path of the BIOS, executed.
-boot :: BIOS -> [Relation]
-boot (BIOS paths) = run paths
+-- | Every path of the BIOS, tried from the same relation.
+boot :: BIOS -> Relation -> [Attempt Relation]
+boot (BIOS paths) r = run paths
   where
     run [] = []
-    run (p : ps) = executePath p : run ps
+    run (p : ps) = executePath p r : run ps
 
--- | Does every path of the kernel's BIOS close to the zero relation?
+-- | Every path of the kernel's BIOS, tried from each of the kernel's relations.
+runKernel :: BootKernel -> [Attempt Relation]
+runKernel (BootKernel bios states) = each states
+  where
+    each [] = []
+    each (s : ss) = append (boot bios s) (each ss)
+    append [] ys = ys
+    append (x : xs) ys = x : append xs ys
+
+-- | Was every attempt tried (none caught), and did each close to zero?
 bootClosed :: BootKernel -> Bool
-bootClosed (BootKernel bios _) = allClosed (boot bios)
+bootClosed kernel = allClosed (runKernel kernel)
   where
     allClosed [] = Tru
-    allClosed (r : rs) = case relationClosed r of
-      Tru -> allClosed rs
+    allClosed (Caught _ : _) = Fls
+    allClosed (Tried r : rest) = case relationClosed r of
+      Tru -> allClosed rest
       Fls -> Fls
 
 -- Each 16-bit word advanced by the delta law with itself as correction.
