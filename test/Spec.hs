@@ -17,6 +17,9 @@ import qualified OMI.Scope as S
 import qualified OMI.VCS as VCS
 import qualified OMI.Wittgenstein as W
 import qualified OMI.Canvas.JSON as CJ
+import qualified OMI.Delta as D
+import qualified OMI.Handler as H
+import qualified Data.Bits as HostBits
 import OMI.Core
 import OMI.Kernel
 
@@ -39,6 +42,9 @@ main = do
   testUnaryAdvanceAndXor
   testCarrierIgnoresEvidenceChecksumIdentity
   testStreamAndGossipAdapters
+  testDeltaMatchesSpec
+  testDeltaPeriodEight
+  testHandlerMatchesOmiReference
 
 testGaugeOperators :: IO ()
 testGaugeOperators =
@@ -422,3 +428,68 @@ samePlaceDifferentEvidenceSample =
   ++ "```canvas fs=sample.md gs=projection rs=face us=a\n"
   ++ "{\"nodes\":[]}\n"
   ++ "```\n"
+
+-- Merged from the former omi reference (omi-files/omi): the delta law and
+-- the handler, now on the nibble-pair kernel types.
+
+testDeltaMatchesSpec :: IO ()
+testDeltaMatchesSpec =
+  sequence_
+    [ assertHostTrue ("delta differs from rotl1^rotl3^rotr2^c at x=" ++ show x ++ " c=" ++ show c)
+        (fromW16 (D.delta (toW16 x) (toW16 c)) == specDelta x c)
+    | c <- [0x0000, 0x001D, 0x1D1D, 0x1337, 0xFFFF]
+    , x <- [0 .. 65535]
+    ]
+  where
+    specDelta x c =
+      (rot16L x 1 `HostBits.xor` rot16L x 3 `HostBits.xor` rot16L x 14 `HostBits.xor` c) HostBits..&. 0xFFFF
+    rot16L x n = ((x `HostBits.shiftL` n) HostBits..|. (x `HostBits.shiftR` (16 - n))) HostBits..&. 0xFFFF
+
+testDeltaPeriodEight :: IO ()
+testDeltaPeriodEight =
+  sequence_
+    [ assertEqualInt ("delta^8 is not the identity for seed " ++ show seed)
+        seed (fromW16 (D.delta8 (toW16 seed) D.deltaC))
+    | seed <- [1, 2, 3, 5, 7, 11, 17, 60, 64, 124, 255, 256, 1000, 65535]
+    ]
+
+-- Expected slot values (relW16a .. relW16h) produced by the omi reference
+-- before the merge, for bind / apply / eval / digest of (PPoint a, PNumber b).
+testHandlerMatchesOmiReference :: IO ()
+testHandlerMatchesOmiReference =
+  sequence_
+    [ do check "bind" (H.bind p q) eBind
+         check "apply" (H.apply p q) eApply
+         check "eval" (H.eval p q) eEval
+         check "digest" (H.digest p q) eDigest
+    | (a, b, eBind, eApply, eEval, eDigest) <- omiReference
+    , let p = H.PPoint (toW16 a)
+          q = H.PNumber (toW16 b)
+    ]
+  where
+    check name rel expected =
+      assertHostTrue ("handler " ++ name ++ " differs from the omi reference: " ++ show (slots rel))
+        (slots rel == expected)
+    slots r = map fromW16 [Rel.relW16a r, Rel.relW16b r, Rel.relW16c r, Rel.relW16d r,
+                           Rel.relW16e r, Rel.relW16f r, Rel.relW16g r, Rel.relW16h r]
+    omiReference =
+      [ (0, 0, [0,0,0,0,0,0,0,0], [7453,7453,7453,7453,7453,7453,7453,7453], [34952,34952,34952,34952,34952,34952,34952,34952], [7453,7453,7453,7453,7453,7453,7453,7453])
+      , (3, 5, [3,5,0,0,0,0,0,0], [56579,7453,23870,7453,7453,7453,7453,7453], [34952,47172,34952,55772,34952,34952,34952,34952], [56576,7448,23870,7453,7453,7453,7453,7453])
+      , (60, 64, [60,64,0,0,0,0,0,0], [7306,7453,8077,7453,7453,7453,7453,7453], [34952,18299,34952,39308,34952,34952,34952,34952], [7350,7517,8077,7453,7453,7453,7453,7453])
+      , (17, 19, [17,19,0,0,0,0,0,0], [23987,7453,56743,7453,7453,7453,7453,7453], [34952,40077,34952,48133,34952,34952,34952,34952], [23970,7438,56743,7453,7453,7453,7453,7453])
+      , (65535, 1, [65535,1,0,0,0,0,0,0], [58082,7453,23831,7453,7453,7453,7453,7453], [34952,30583,34952,39116,34952,34952,34952,34952], [7453,7452,23831,7453,7453,7453,7453,7453])
+      ]
+
+-- Host-side conversions for tests only (the core stays free of Int).
+toW16 :: Int -> Word16
+toW16 n = W16 (B (nib 15) (nib 11)) (B (nib 7) (nib 3))
+  where
+    nib top = N (bit top) (bit (top - 1)) (bit (top - 2)) (bit (top - 3))
+    bit i = if HostBits.testBit n i then I else O
+
+fromW16 :: Word16 -> Int
+fromW16 (W16 (B (N a1 a2 a3 a4) (N a5 a6 a7 a8)) (B (N b1 b2 b3 b4) (N b5 b6 b7 b8))) =
+  foldl (\acc b -> acc * 2 + bitInt b) 0 [a1, a2, a3, a4, a5, a6, a7, a8, b1, b2, b3, b4, b5, b6, b7, b8]
+  where
+    bitInt O = 0
+    bitInt I = 1

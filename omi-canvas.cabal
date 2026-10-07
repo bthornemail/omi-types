@@ -5,13 +5,16 @@ build-type: Simple
 
 library
   exposed-modules:
+      OMI.Bits
       OMI.Canvas
       OMI.Canvas.JSON
       OMI.Carrier
       OMI.Core
       OMI.DecisionTable
+      OMI.Delta
       OMI.Gauge
       OMI.Gossip.Types
+      OMI.Handler
       OMI.Karnaugh
       OMI.Kernel
       OMI.Lisp
