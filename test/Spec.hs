@@ -19,6 +19,12 @@ import qualified OMI.Wittgenstein as W
 import qualified OMI.Canvas.JSON as CJ
 import qualified OMI.Delta as D
 import qualified OMI.Handler as H
+import qualified OMI.BIOS as BIOS
+import qualified OMI.BQF as Q
+import qualified OMI.Orbit as Orb
+import qualified OMI.Ruler as Ru
+import qualified OMI.Torus as T
+import qualified OMI.Types ()
 import qualified Data.Bits as HostBits
 import OMI.Core
 import OMI.Kernel
@@ -45,6 +51,14 @@ main = do
   testDeltaMatchesSpec
   testDeltaPeriodEight
   testHandlerMatchesOmiReference
+  testOrbitOf60
+  testBlocks
+  testOrbitConstants
+  testQuadraticForms
+  testTorusMetric
+  testRulerFold
+  testBiosFromZero
+  testHandlerPositionTypes
 
 testGaugeOperators :: IO ()
 testGaugeOperators =
@@ -493,3 +507,110 @@ fromW16 (W16 (B (N a1 a2 a3 a4) (N a5 a6 a7 a8)) (B (N b1 b2 b3 b4) (N b5 b6 b7 
   where
     bitInt O = 0
     bitInt I = 1
+
+-- Types augmented from "The OMI Protocol in Pure Haskell - Corrected".
+
+testOrbitOf60 :: IO ()
+testOrbitOf60 = do
+  assertHostTrue "orbit60 is not 60 xor n for n = 0..63"
+    (map fromByte Orb.orbit60 == [60 `HostBits.xor` n | n <- [0 .. 63]])
+  assertEqualString "the first sixteen of the orbit are not the four blocks"
+    "<=>?89:;45670123" (map (toEnum . fromByte) (take 16 Orb.orbit60))
+
+testBlocks :: IO ()
+testBlocks =
+  sequence_
+    [ assertEqualString ("block of " ++ show n) expected (blockName (Orb.blockOf (toByte n)))
+    | (n, expected) <- [(63, "0"), (60, "0"), (59, "1"), (56, "1"), (55, "2"), (52, "2"), (51, "3"), (48, "3"), (47, "-"), (64, "-"), (124, "-")]
+    ]
+  where
+    blockName (Orb.InBlock Orb.Block0) = "0"
+    blockName (Orb.InBlock Orb.Block1) = "1"
+    blockName (Orb.InBlock Orb.Block2) = "2"
+    blockName (Orb.InBlock Orb.Block3) = "3"
+    blockName Orb.OutsideBlocks = "-"
+
+testOrbitConstants :: IO ()
+testOrbitConstants = do
+  assertEqualInt "diagonal is not 12" 12 (fromByte Orb.diagonal)
+  assertHostTrue "four-block family is not [3,7,11,15]" (map fromByte Orb.fourBlockFamily == [3, 7, 11, 15])
+  assertHostTrue "four-block family is not 3 xor {0,4,8,12}" (map fromByte Orb.fourBlockFamily == map (HostBits.xor 3) [0, 4, 8, 12])
+  assertEqualInt "orbital base is not 19" 19 (fromByte Orb.orbitalBase)
+  assertEqualInt "orbital base is not orthogonal to the diagonal" 0 (fromByte Orb.orbitalBase HostBits..&. fromByte Orb.diagonal)
+
+testQuadraticForms :: IO ()
+testQuadraticForms = do
+  assertEqualInt "projective discriminant is not -704" (-704) (disc Q.projective)
+  assertEqualInt "affine discriminant is not 0" 0 (disc Q.affine)
+  assertHostTrue "lift is not projective minus affine"
+    (coeffs Q.liftForm == zipWith (-) (coeffs Q.projective) (coeffs Q.affine))
+  where
+    coeffs q = map fromByte [Q.formA q, Q.formB q, Q.formC q]
+    disc q = case coeffs q of
+      [a, b, c] -> b * b - 4 * a * c
+      _ -> error "three coefficients"
+
+testTorusMetric :: IO ()
+testTorusMetric = do
+  assertHostTrue "weight is not symmetric"
+    (and [weightOf a b == weightOf b a | a <- cells, b <- cells])
+  assertHostTrue "a cell is not at weight 0 from itself" (and [weightOf a a == 0 | a <- cells])
+  assertEqualInt "the diagonal does not have four cells" 4 (length (filter onDiag cells))
+  assertEqualInt "the largest weight is not 4" 4 (maximum [weightOf a b | a <- cells, b <- cells])
+  assertHostTrue "a diagonal cell is not its own nearest diagonal cell"
+    (and [weightOf d (T.nearestDiagonal d) == 0 | d <- T.diagonalCells])
+  where
+    cells = [T.Cell s h | s <- [T.FS, T.GS, T.RS, T.US], h <- [T.KK, T.KU, T.UK, T.UU]]
+    weightOf a b = case T.weight a b of
+      T.W0 -> 0 :: Int
+      T.W1 -> 1
+      T.W2 -> 2
+      T.W3 -> 3
+      T.W4 -> 4
+    onDiag c = case T.onDiagonal c of
+      Rel.Tru -> True
+      Rel.Fls -> False
+
+-- The ruler fold (state' = delta(state, correction), correction' = state)
+-- returns after 24 steps; measured on one word before porting.
+testRulerFold :: IO ()
+testRulerFold =
+  sequence_
+    [ do let start = Ru.mkRuler (wordRel a) (wordRel c)
+             end = iterate Ru.advanceRuler start !! 24
+         assertRelation ("ruler state did not return after 24 steps for " ++ show (a, c)) (Ru.rulerState start) (Ru.rulerState end)
+         assertRelation ("ruler correction did not return after 24 steps for " ++ show (a, c)) (Ru.rulerCorrection start) (Ru.rulerCorrection end)
+    | (a, c) <- [(1, 0), (60, 64), (0x1D1D, 0x1337), (65535, 12)]
+    ]
+  where
+    wordRel n = Rel.setW16a nullRel (toW16 n)
+
+-- As in the document: from the zero relation every gate path stays closed.
+testBiosFromZero :: IO ()
+testBiosFromZero = do
+  let paths = [ BIOS.mkGatePath BIOS.Endpoint5T BIOS.Endpoint10T [BIOS.Interior6T, BIOS.Interior8T]
+              , BIOS.mkGatePath BIOS.Endpoint5T BIOS.Endpoint5T []
+              ]
+      kernel = BIOS.mkBootKernel (BIOS.mkBIOS paths) []
+  case BIOS.bootClosed kernel of
+    Rel.Tru -> pure ()
+    Rel.Fls -> fail "a BIOS path from zero did not close"
+
+testHandlerPositionTypes :: IO ()
+testHandlerPositionTypes = do
+  assertEqualInt "PDecimal 0x12 0x34 does not read as 0x1234" 0x1234
+    (fromW16 (H.positionWord (H.PDecimal (toW16 0x12) (toW16 0x34))))
+  assertEqualInt "PLiteral 3 x 4 n does not pack as 0x3242" 0x3242
+    (fromW16 (H.positionWord (H.PLiteral (toW16 3) H.RadixX (toW16 4) H.KindN)))
+  assertEqualInt "a deviation's difference is not expected xor actual" (7 `HostBits.xor` 9)
+    (fromW16 (H.deviationDifference (H.deviation (H.PPoint (toW16 5)) (toW16 7) (toW16 9))))
+  assertRelation "runOperation Digest differs from digest"
+    (H.digest (H.PPoint (toW16 3)) (H.PNumber (toW16 5)))
+    (H.runOperation H.Digest (H.PPoint (toW16 3)) (H.PNumber (toW16 5)))
+
+toByte :: Int -> Byte
+toByte n = case toW16 n of
+  W16 _ lo -> lo
+
+fromByte :: Byte -> Int
+fromByte b = fromW16 (W16 (B (N O O O O) (N O O O O)) b)

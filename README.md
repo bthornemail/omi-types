@@ -1,4 +1,29 @@
-# OMI Canvas Type Engine v0
+# OMI Types
+
+`omi-types` is a fork of `omi-canvas` (upstream: `git@github.com:bthornemail/omi-canvas.git`) that keeps the whole canvas type engine and adds the type surface of *The OMI Protocol in Pure Haskell - Corrected* (`boxedPINE/_archive/`), rewritten to this package's rules: no host `Int`, `String` or `Maybe` in the core, only `Bit`, `Nibble`, `Byte`, `Word16`, `Word32`, `Relation` and types built from them.
+
+## Added Types
+
+| Module | Types | From the Corrected document |
+|--------|-------|-----------------------------|
+| `OMI.Ruler` | `Ruler` | Part III: two relation halves that trade places each step |
+| `OMI.Orbit` | `Block`, `BlockReading` | Part V: the orbit of 60 and its four blocks, read from bit patterns |
+| `OMI.BQF` | `QuadraticForm` | Part IV: the forms as declared coefficients; evaluation is a value read, left to adapters |
+| `OMI.Handler` | `Position` (all ten), `Radix`, `Kind`, `Separator`, `Deviation`, `Operation` | Part VI: `Char` fields become small enums |
+| `OMI.BIOS` | `Endpoint`, `Interior`, `GatePath`, `BIOS`, `BootKernel` | Part VIII: `Path` → `GatePath`, `Kernel` → `BootKernel` to avoid clashes |
+| `OMI.Torus` | `Scope`, `Shape`, `Cell`, `Distance`, `Weight` | Part IX: distances and weights are enums, not integers |
+| `OMI.Protocol` | `Protocol` | Part X: declarations are `SExpr`, decided by the canvas pipeline |
+| `OMI.Types` | every type above and the canvas types | Part XI: one import |
+
+Also carried from the earlier merge of the `omi` reference: `OMI.Bits`, `OMI.Delta`.
+
+Not ported: the document's string `Grammar` record. Here the `Position` constructors are the grammar; the string patterns live in `boxedPINE/rosetta/src/grammar/grammar.ts`.
+
+⟦PLACEHOLDER⟧ The nibble layout of `positionWord` for `PLiteral` and `PStruct` is a proposal; see `OMI.Handler`.
+
+---
+
+## Inherited: OMI Canvas Type Engine v0
 
 `omi-canvas` is the Haskell type engine for discovering OMI declarations, reducing them through the canonical pipeline, witnessing memory reconciliation, and projecting accepted relations onto canvas surfaces.
 

@@ -1,11 +1,13 @@
 cabal-version: 3.0
-name: omi-canvas
+name: omi-types
 version: 0.1.0.0
 build-type: Simple
 
 library
   exposed-modules:
       OMI.Bits
+      OMI.BIOS
+      OMI.BQF
       OMI.Canvas
       OMI.Canvas.JSON
       OMI.Carrier
@@ -21,32 +23,37 @@ library
       OMI.Markdown
       OMI.Memory
       OMI.Net.Frame
+      OMI.Orbit
       OMI.Pipeline
+      OMI.Protocol
       OMI.Reconcile
       OMI.Relation
+      OMI.Ruler
       OMI.Runtime
       OMI.Scope
       OMI.Stream
+      OMI.Torus
       OMI.TruthGate
+      OMI.Types
       OMI.VCS
       OMI.Wittgenstein
   hs-source-dirs: src
   build-depends: base >=4.16 && <5
   default-language: Haskell2010
 
-executable omi-canvas
+executable omi-types
   main-is: Main.hs
   hs-source-dirs: app
   build-depends:
       base >=4.16 && <5,
-      omi-canvas
+      omi-types
   default-language: Haskell2010
 
-test-suite omi-canvas-test
+test-suite omi-types-test
   type: exitcode-stdio-1.0
   main-is: Spec.hs
   hs-source-dirs: test
   build-depends:
       base >=4.16 && <5,
-      omi-canvas
+      omi-types
   default-language: Haskell2010

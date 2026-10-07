@@ -1,6 +1,6 @@
 # AGENTS
 
-This repository is the Haskell OMI Canvas type-engine workspace.
+This repository is the Haskell OMI Types workspace: a fork of `omi-canvas` that adds the type surface of *The OMI Protocol in Pure Haskell - Corrected* (see README, "Added Types"). Everything below is inherited from `omi-canvas` and still applies.
 
 Treat `omi-canvas` as the typed projection and construction-pipeline layer. Do not turn Canvas into an authority layer.
 

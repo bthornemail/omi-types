@@ -1,14 +1,33 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 
 -- | The four handler operations over positions, merged from the former
---   @omi@ reference. Positions carry a 'Word16' index, not a host integer
---   (indices, not values).
+--   @omi@ reference and augmented with the types of "The OMI Protocol in
+--   Pure Haskell - Corrected", Part VI. Positions carry 'Word16' indices,
+--   not host integers (indices, not values), and the document's @Char@
+--   fields are the small enums 'Radix', 'Kind' and 'Separator'.
+--
+--   The document's string @Grammar@ is not ported: in this package the
+--   'Position' constructors are the grammar (every value is admissible by
+--   construction, as the document says), and the string patterns live in
+--   @rosetta/src/grammar/grammar.ts@.
 --
 --   This is a reference reading of bind / apply / eval / digest, not an
 --   authority layer: acceptance still goes through "OMI.Pipeline".
 module OMI.Handler
   ( Position(..)
+  , Radix(..)
+  , Kind(..)
+  , Separator(..)
   , positionWord
+  , Deviation
+  , deviation
+  , deviationPosition
+  , deviationExpected
+  , deviationActual
+  , deviationDifference
+  , Operation(..)
+  , allOperations
+  , runOperation
   , bind
   , apply
   , eval
@@ -23,17 +42,99 @@ import OMI.Delta
 import OMI.Kernel
 import OMI.Relation
 
+-- | The radix letters of @[boxd]@.
+data Radix = RadixB | RadixO | RadixX | RadixD
+
+-- | The literal kinds of @[pin]@.
+data Kind = KindP | KindI | KindN
+
+-- | The separators of @[e.]@ in a STRUCT wordform.
+data Separator = SepE | SepDot
+
 data Position
   = PPoint Word16
   | PIndex Word16
   | PNumber Word16
   | PExponent Word16
+  | PBinary Word16
+  | POctal Word16
+  | PHex Word16
+  | PDecimal Word16 Word16
+  | PLiteral Word16 Radix Word16 Kind
+  | PStruct Word16 Separator Word16 Radix Word16 Kind
 
+-- | The 16-bit reading of a position.
+--
+--   Simple positions read their own word. @PDecimal a b@ reads as the low
+--   byte of @a@ then the low byte of @b@ (the document's @a * 256 + b@).
+--
+--   ⟦PLACEHOLDER⟧ For @PLiteral@ and @PStruct@ the document packed host
+--   character codes, which overlap. This port packs four nibbles instead:
+--   PLiteral = a | radix | b | kind, PStruct = a | separator | b | radix,
+--   keeping the same fields the document used. The author should confirm
+--   the layout.
 positionWord :: Position -> Word16
 positionWord (PPoint w) = w
 positionWord (PIndex w) = w
 positionWord (PNumber w) = w
 positionWord (PExponent w) = w
+positionWord (PBinary w) = w
+positionWord (POctal w) = w
+positionWord (PHex w) = w
+positionWord (PDecimal a b) = W16 (lowByte a) (lowByte b)
+positionWord (PLiteral a r b k) = W16 (B (lowNibble a) (radixNibble r)) (B (lowNibble b) (kindNibble k))
+positionWord (PStruct a s b r _ _) = W16 (B (lowNibble a) (separatorNibble s)) (B (lowNibble b) (radixNibble r))
+
+lowByte :: Word16 -> Byte
+lowByte (W16 _ lo) = lo
+
+lowNibble :: Word16 -> Nibble
+lowNibble (W16 _ (B _ lo)) = lo
+
+radixNibble :: Radix -> Nibble
+radixNibble RadixB = N O O O O
+radixNibble RadixO = N O O O I
+radixNibble RadixX = N O O I O
+radixNibble RadixD = N O O I I
+
+kindNibble :: Kind -> Nibble
+kindNibble KindP = N O O O O
+kindNibble KindI = N O O O I
+kindNibble KindN = N O O I O
+
+separatorNibble :: Separator -> Nibble
+separatorNibble SepE = N O O O O
+separatorNibble SepDot = N O O O I
+
+-- | A failed compare-exchange: where, what was expected, what was there,
+--   and the difference (expected XOR actual), which is also the repair.
+data Deviation = Deviation Position Word16 Word16 Word16
+
+deviation :: Position -> Word16 -> Word16 -> Deviation
+deviation p expected actual = Deviation p expected actual (xorWord16 expected actual)
+
+deviationPosition :: Deviation -> Position
+deviationPosition (Deviation p _ _ _) = p
+
+deviationExpected :: Deviation -> Word16
+deviationExpected (Deviation _ e _ _) = e
+
+deviationActual :: Deviation -> Word16
+deviationActual (Deviation _ _ a _) = a
+
+deviationDifference :: Deviation -> Word16
+deviationDifference (Deviation _ _ _ d) = d
+
+data Operation = Bind | Apply | Eval | Digest
+
+allOperations :: [Operation]
+allOperations = [Bind, Apply, Eval, Digest]
+
+runOperation :: Operation -> Position -> Position -> Relation
+runOperation Bind = bind
+runOperation Apply = apply
+runOperation Eval = eval
+runOperation Digest = digest
 
 -- | Bind: the two positions in the first two slots.
 bind :: Position -> Position -> Relation
