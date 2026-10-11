@@ -22,6 +22,7 @@ import qualified OMI.Handler as H
 import qualified OMI.BIOS as BIOS
 import qualified OMI.BQF as Q
 import qualified OMI.Orbit as Orb
+import qualified OMI.Fano as F
 import qualified OMI.Ruler as Ru
 import qualified OMI.Torus as T
 import qualified OMI.Types ()
@@ -58,6 +59,7 @@ main = do
   testQuadraticForms
   testTorusMetric
   testRulerFold
+  testFanoConstants
   testBiosTriesTheGivenRelation
   testCaughtFrameRepairsForAnotherTry
   testCoordinateNibbles
@@ -663,3 +665,38 @@ toByte n = case toW16 n of
 
 fromByte :: Byte -> Int
 fromByte b = fromW16 (W16 (B (N O O O O) (N O O O O)) b)
+
+-- The sixteen Fano constants, tracking boxedPINE core/src/verified/fano.ts
+-- (wiki: SPEC-07 I-65 to I-67, I-77, I-80).
+toMask :: Int -> F.Mask
+toMask n = F.Mask (b 0) (b 1) (b 2) (b 3) (b 4) (b 5) (b 6)
+  where b k = if HostBits.testBit n k then I else O
+
+toTriad :: Int -> F.Triad
+toTriad n = F.T (b 2) (b 1) (b 0)
+  where b k = if HostBits.testBit n k then I else O
+
+fromTriad :: F.Triad -> Int
+fromTriad (F.T a b c) = 4 * bitInt a + 2 * bitInt b + bitInt c
+  where bitInt I = 1
+        bitInt O = 0
+
+truth :: F.Bool -> Bool
+truth F.Tru = True
+truth F.Fls = False
+
+testFanoConstants :: IO ()
+testFanoConstants = do
+  let closed = [n | n <- [0 .. 127], truth (F.isConstant (toMask n))]
+  assertEqualInt "the XOR-closed masks are not exactly 16" 16 (length closed)
+  assertHostTrue "some mask does not converge to a constant in two steps"
+    (all (\n -> truth (F.isConstant (F.converge (toMask n)))) [0 .. 127])
+  let triads = [(a, b, c) | a <- [0 .. 7], b <- [0 .. 7], c <- [0 .. 7]]
+      moving = [t | t@(a, b, c) <- triads, truth (F.independent (toTriad a) (toTriad b) (toTriad c))]
+  assertEqualInt "the transforms that move the plane onto itself are not 168" 168 (length moving)
+  assertHostTrue "an independent triple does not permute the seven points"
+    (all (\(a, b, c) -> length (dedupe [fromTriad (F.transform3 (toTriad a) (toTriad b) (toTriad c) (toTriad x)) | x <- [1 .. 7]]) == 7) moving)
+  assertEqualInt "9 xor 10 is not swap32's mask 3" 3 (9 `HostBits.xor` (10 :: Int))
+  assertEqualInt "11 observed through 9 xor 10 is not the single bit 8" 8 (11 `HostBits.xor` (9 `HostBits.xor` (10 :: Int)))
+  where
+    dedupe = foldr (\x acc -> if x `elem` acc then acc else x : acc) []

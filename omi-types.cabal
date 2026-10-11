@@ -6,6 +6,7 @@ build-type: Simple
 library
   exposed-modules:
       OMI.Bits
+      OMI.Fano
       OMI.BIOS
       OMI.BQF
       OMI.Canvas
