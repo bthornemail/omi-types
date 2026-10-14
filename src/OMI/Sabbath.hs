@@ -16,12 +16,14 @@
 --   Op = (OpOk and Success) or Error: it either steps to the next mode or is
 --   refused, with the reason and the sequence number of the refused event.
 --
---   The rules are the Haskell document's. They are stricter than the Coq
---   proof (proofs/coq/04-execution/SabbathProtocolRejectsRestAttestation.v)
---   in two places: resuming when nothing was suspended, and suspending again,
---   are refused here and allowed (the mode unchanged) there. Both agree that
---   an attestation during the Sabbath is refused. The test suite lists the
---   two differences against the Coq step.
+--   The rules are the Haskell document's, and they are the contract: the
+--   author, 2026-10-13, asked which of the two is right, "the haskell
+--   contract". The Coq proof (proofs/coq/04-execution/
+--   SabbathProtocolRejectsRestAttestation.v) is weaker in two places: it
+--   allows resuming when nothing was suspended, and suspending again (the
+--   mode unchanged), where the contract refuses both. Both agree that an
+--   attestation during the Sabbath is refused. The proofs' Coq is locked, so
+--   the proof stays as it is; the test suite lists the two places it is weaker.
 module OMI.Sabbath
   ( Mode(..)
   , EventKind(..)
