@@ -8,6 +8,7 @@ library
       OMI.Bits
       OMI.Fano
       OMI.BIOS
+      OMI.Sabbath
       OMI.BQF
       OMI.Canvas
       OMI.Canvas.JSON

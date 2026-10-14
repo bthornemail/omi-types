@@ -1,6 +1,7 @@
 module Main where
 
 import Prelude
+import Data.List (intercalate)
 
 import qualified OMI.Carrier as C
 import qualified OMI.DecisionTable as DT
@@ -20,6 +21,8 @@ import qualified OMI.Canvas.JSON as CJ
 import qualified OMI.Delta as D
 import qualified OMI.Handler as H
 import qualified OMI.BIOS as BIOS
+import qualified OMI.Sabbath as Sab
+import qualified OMI.Kernel as K
 import qualified OMI.BQF as Q
 import qualified OMI.Orbit as Orb
 import qualified OMI.Fano as F
@@ -61,6 +64,8 @@ main = do
   testRulerFold
   testFanoConstants
   testBiosTriesTheGivenRelation
+  testSabbathContract
+  testSabbathAgainstCoq
   testCaughtFrameRepairsForAnotherTry
   testCoordinateNibbles
   testHandlerPositionTypes
@@ -700,3 +705,62 @@ testFanoConstants = do
   assertEqualInt "11 observed through 9 xor 10 is not the single bit 8" 8 (11 `HostBits.xor` (9 `HostBits.xor` (10 :: Int)))
   where
     dedupe = foldr (\x acc -> if x `elem` acc then acc else x : acc) []
+
+-- ---- The Sabbath contract (OMI.Sabbath) ----
+
+-- sequence number n as an OMI Word32 (low bits only, enough for the tests)
+seqWord :: Int -> K.Word32
+seqWord n = K.W32 z (K.W16 z8 (K.B z4 (K.N (b 3) (b 2) (b 1) (b 0))))
+  where
+    z4 = K.N K.O K.O K.O K.O
+    z8 = K.B z4 z4
+    z = K.W16 z8 z8
+    b i = if (n `div` (2 ^ (i :: Int))) `mod` 2 == 1 then K.I else K.O
+
+seqInt :: K.Word32 -> Int
+seqInt (K.W32 _ (K.W16 _ (K.B _ (K.N a b2 c d)))) = sum [v a * 8, v b2 * 4, v c * 2, v d]
+  where v K.I = 1; v K.O = 0
+
+modeName :: Sab.Mode -> String
+modeName Sab.Normal = "Normal"
+modeName Sab.Sabbath = "Sabbath"
+
+stepName :: Sab.Step -> String
+stepName (Sab.Stepped m) = "-> " ++ modeName m
+stepName (Sab.Refused Sab.SabbathViolation n) = "refused: SabbathViolation #" ++ show (seqInt n)
+stepName (Sab.Refused Sab.InvalidModeTransition n) = "refused: InvalidModeTransition #" ++ show (seqInt n)
+
+kinds :: [(String, Sab.EventKind)]
+kinds = [("Utterance", Sab.Utterance), ("Attestation", Sab.Attestation), ("AttestationSuspended", Sab.AttestationSuspended), ("AttestationResumed", Sab.AttestationResumed), ("Ceremony", Sab.Ceremony), ("Checkpoint", Sab.Checkpoint)]
+
+testSabbathContract :: IO ()
+testSabbathContract = do
+  -- the document's own test: attestation during the Sabbath is refused, carrying the sequence number
+  assertEqualString "attestation during the Sabbath" "refused: SabbathViolation #2" (stepName (Sab.validate Sab.Sabbath (Sab.Event (seqWord 2) Sab.Attestation)))
+  assertEqualString "suspension starts the Sabbath" "-> Sabbath" (stepName (Sab.validate Sab.Normal (Sab.Event (seqWord 1) Sab.AttestationSuspended)))
+  assertEqualString "resumption ends it" "-> Normal" (stepName (Sab.validate Sab.Sabbath (Sab.Event (seqWord 1) Sab.AttestationResumed)))
+  assertEqualString "resuming with nothing suspended" "refused: InvalidModeTransition #3" (stepName (Sab.validate Sab.Normal (Sab.Event (seqWord 3) Sab.AttestationResumed)))
+  assertEqualString "suspending twice" "refused: InvalidModeTransition #4" (stepName (Sab.validate Sab.Sabbath (Sab.Event (seqWord 4) Sab.AttestationSuspended)))
+  -- a trace: speak, suspend, speak, resume, attest: fine; attest inside the Sabbath: refused at that event
+  let ev n k = Sab.Event (seqWord n) k
+  assertEqualString "a clean trace" "-> Normal" (stepName (Sab.run Sab.Normal [ev 1 Sab.Utterance, ev 2 Sab.AttestationSuspended, ev 3 Sab.Ceremony, ev 4 Sab.AttestationResumed, ev 5 Sab.Attestation]))
+  assertEqualString "a trace that attests in the Sabbath stops there" "refused: SabbathViolation #3" (stepName (Sab.run Sab.Normal [ev 1 Sab.Utterance, ev 2 Sab.AttestationSuspended, ev 3 Sab.Attestation, ev 4 Sab.AttestationResumed]))
+
+-- The Coq proof's step (proofs/coq/04-execution/SabbathProtocolRejectsRestAttestation.v), transcribed:
+--   Normal, AttestSuspended => Some SabbathMode; SabbathMode, AttestResumed => Some Normal;
+--   SabbathMode, Attestation => None; _, _ => Some mode.  (Coq has no Checkpoint.)
+coqStep :: Sab.Mode -> Sab.EventKind -> String
+coqStep Sab.Normal Sab.AttestationSuspended = "-> Sabbath"
+coqStep Sab.Sabbath Sab.AttestationResumed = "-> Normal"
+coqStep Sab.Sabbath Sab.Attestation = "refused"
+coqStep m _ = "-> " ++ modeName m
+
+testSabbathAgainstCoq :: IO ()
+testSabbathAgainstCoq = do
+  let short s = if take 7 s == "refused" then "refused" else s
+      rows = [ (modeName m ++ ", " ++ kn, short (stepName (Sab.validate m (Sab.Event (seqWord 0) k))), coqStep m k)
+             | m <- [Sab.Normal, Sab.Sabbath], (kn, k) <- kinds, kn /= "Checkpoint" ]
+      differ = [ r | r@(_, h, c) <- rows, h /= c ]
+  assertEqualString "Haskell and Coq differ in exactly two places"
+    "Normal, AttestationResumed: Haskell refused, Coq -> Normal; Sabbath, AttestationSuspended: Haskell refused, Coq -> Sabbath"
+    (intercalate "; " [ w ++ ": Haskell " ++ h ++ ", Coq " ++ c | (w, h, c) <- differ ])
