@@ -30,6 +30,7 @@ import qualified OMI.Ruler as Ru
 import qualified OMI.Torus as T
 import qualified OMI.Types ()
 import qualified OMI.Try as Try
+import qualified OMI.WSN as WSN
 import qualified Data.Bits as HostBits
 import OMI.Core
 import OMI.Kernel
@@ -69,6 +70,10 @@ main = do
   testCaughtFrameRepairsForAnotherTry
   testCoordinateNibbles
   testHandlerPositionTypes
+  testWsnInItself
+  testWsnCasts
+  testWsnStackUnderCasts
+  testWsnLogic
 
 testGaugeOperators :: IO ()
 testGaugeOperators =
@@ -764,3 +769,111 @@ testSabbathAgainstCoq = do
   assertEqualString "Haskell and Coq differ in exactly two places"
     "Normal, AttestationResumed: Haskell refused, Coq -> Normal; Sabbath, AttestationSuspended: Haskell refused, Coq -> Sabbath"
     (intercalate "; " [ w ++ ": Haskell " ++ h ++ ", Coq " ++ c | (w, h, c) <- differ ])
+
+-- Wirth syntax notation, tracking unbound/PLAN9 (wsn/stack.wsn, src/zcast.c, src/zlazy.c)
+wsnBytes :: String -> [Byte]
+wsnBytes = map (toByte . fromEnum)
+
+wsnString :: [Byte] -> String
+wsnString = map (toEnum . byteValue)
+  where
+    byteValue (B (N a b c d) (N e f g h)) = foldl (\acc x -> acc * 2 + bit x) 0 [a, b, c, d, e, f, g, h]
+    bit O = 0
+    bit I = 1
+
+wsnParse :: String -> WSN.Syntax
+wsnParse t = case WSN.parse (wsnBytes t) of
+  WSN.Read g -> g
+  WSN.NoRead -> error ("does not parse: " ++ t)
+
+wsnAnswer :: WSN.Answer -> String
+wsnAnswer WSN.Yes = "yes"
+wsnAnswer WSN.No = "no"
+
+-- WSN defined in itself (upper case identifiers: letter and character left to the language)
+testWsnInItself :: IO ()
+testWsnInItself = do
+  let wirth = unlines
+        [ "SYNTAX     = { PRODUCTION } ."
+        , "PRODUCTION = IDENTIFIER \"=\" EXPRESSION \".\" ."
+        , "EXPRESSION = TERM { \"|\" TERM } ."
+        , "TERM       = FACTOR { FACTOR } ."
+        , "FACTOR     = IDENTIFIER | LITERAL | \"[\" EXPRESSION \"]\""
+        , "           | \"(\" EXPRESSION \")\" | \"{\" EXPRESSION \"}\" ."
+        , "IDENTIFIER = LETTER { LETTER } ."
+        , "LITERAL    = \"\"\"\" CHARACTER { CHARACTER } \"\"\"\" ." ]
+      once = wsnString (WSN.render (wsnParse wirth))
+  assertEqualString "WSN renders itself, one production a line" (unlines
+    [ "SYNTAX = { PRODUCTION } ."
+    , "PRODUCTION = IDENTIFIER \"=\" EXPRESSION \".\" ."
+    , "EXPRESSION = TERM { \"|\" TERM } ."
+    , "TERM = FACTOR { FACTOR } ."
+    , "FACTOR = IDENTIFIER | LITERAL | \"[\" EXPRESSION \"]\" | \"(\" EXPRESSION \")\" | \"{\" EXPRESSION \"}\" ."
+    , "IDENTIFIER = LETTER { LETTER } ."
+    , "LITERAL = \"\"\"\" CHARACTER { CHARACTER } \"\"\"\" ." ]) once
+  assertEqualString "and reads back to the same text" once (wsnString (WSN.render (wsnParse once)))
+  assertHostTrue "a production without its full stop does not parse"
+    (case WSN.parse (wsnBytes "A = \"x\"") of { WSN.NoRead -> True; _ -> False })
+  assertHostTrue "an empty literal does not parse"
+    (case WSN.parse (wsnBytes "A = \"\" .") of { WSN.NoRead -> True; _ -> False })
+
+-- each zeroth's cast, as zcast printed it in Plan 9
+testWsnCasts :: IO ()
+testWsnCasts = do
+  let heldC = "HELDCONSONANT = \"Y\" [ \"out\" \"!\" \"Y\" EMPTY ] | \"H\" [ \"out\" \"!\" \"H\" EMPTY ] | \"W\" [ \"out\" \"!\" \"W\" EMPTY ] ."
+  assertEqualString "YHWH casts consonants and no vowel" (unlines
+    [ "CONSONANT = \"Y\" | \"H\" | \"W\" ."
+    , "LETTER = CONSONANT | VOWEL ."
+    , heldC ]) (wsnString (WSN.render (WSN.cast (wsnBytes "YHWH"))))
+  assertEqualString "YAHWEH adds the vowels, lowered 0x20" (unlines
+    [ "CONSONANT = \"Y\" | \"H\" | \"W\" ."
+    , "VOWEL = \"a\" | \"e\" ."
+    , "LETTER = CONSONANT | VOWEL ."
+    , heldC
+    , "HELDVOWEL = \"a\" [ \"out\" \"!\" \"a\" EMPTY ] | \"e\" [ \"out\" \"!\" \"e\" EMPTY ] ." ])
+    (wsnString (WSN.render (WSN.cast (wsnBytes "YAHWEH"))))
+  assertEqualString "lower case is cast as terms.mjs casts it: yahweh as YAHWEH"
+    (wsnString (WSN.render (WSN.cast (wsnBytes "YAHWEH")))) (wsnString (WSN.render (WSN.cast (wsnBytes "yahweh"))))
+
+-- the stack element under each cast: cast.rc's fourteen answers, and the element never flips 0x20
+testWsnStackUnderCasts :: IO ()
+testWsnStackUnderCasts = do
+  let stack = wsnParse (unlines
+        [ "STACK = EMPTY ."
+        , "EMPTY = [ \"in\" \"?\" HELD ] ."
+        , "HELD = HELDCONSONANT | HELDVOWEL | HELDDIGIT ." ])
+      under z = WSN.extend stack (WSN.cast (wsnBytes z))
+      ask z sentence = wsnAnswer (WSN.accepts (under z) (wsnBytes "STACK") (wsnBytes sentence))
+      rows =
+        [ ("in?Y", "yes", "yes")
+        , ("in?Yout!Y", "yes", "yes")
+        , ("in?Yout!H", "no", "no")
+        , ("in?a", "no", "yes")
+        , ("in?aout!a", "no", "yes")
+        , ("in?aout!A", "no", "no")
+        , ("in?Yout!Yin?Hout!Hin?Wout!Win?Hout!H", "yes", "yes")
+        , ("in?Yout!Yin?aout!ain?Hout!Hin?Wout!Win?eout!ein?Hout!H", "no", "yes") ]
+  sequence_ [ assertEqualString (z ++ " " ++ t) want (ask z t)
+            | (t, yhwh, yahweh) <- rows, (z, want) <- [("YHWH", yhwh), ("YAHWEH", yahweh)] ]
+  assertEqualString "uncast, the element takes nothing (letter undefined)" "no"
+    (wsnAnswer (WSN.accepts stack (wsnBytes "STACK") (wsnBytes "in?Y")))
+  assertEqualString "and is empty" "yes" (wsnAnswer (WSN.accepts stack (wsnBytes "STACK") []))
+
+-- the logic grammar, lazy.rc's questions
+testWsnLogic :: IO ()
+testWsnLogic = do
+  let logic = wsnParse (unlines
+        [ "BIT       = \"0\" | \"1\" ."
+        , "XOR       = \"000\" | \"011\" | \"101\" | \"110\" ."
+        , "XNOR      = \"001\" | \"010\" | \"100\" | \"111\" ."
+        , "FULLADDER = \"000\" \"00\" | \"001\" \"10\" | \"010\" \"10\" | \"011\" \"01\""
+        , "          | \"100\" \"10\" | \"101\" \"01\" | \"110\" \"01\" | \"111\" \"11\" ."
+        , "ADD       = CARRYZERO ."
+        , "CARRYZERO = [ \"000\" CARRYZERO | \"011\" CARRYZERO | \"101\" CARRYZERO | \"110\" CARRYONE ] ."
+        , "CARRYONE  = \"001\" CARRYZERO | \"010\" CARRYONE | \"100\" CARRYONE | \"111\" CARRYONE ." ])
+      ask p t = wsnAnswer (WSN.accepts logic (wsnBytes p) (wsnBytes t))
+  sequence_ [ assertEqualString (p ++ " " ++ t) want (ask p t)
+            | (p, t, want) <-
+                [ ("XOR", "011", "yes"), ("XOR", "010", "no"), ("XNOR", "111", "yes")
+                , ("FULLADDER", "11101", "no"), ("FULLADDER", "11111", "yes"), ("FULLADDER", "01101", "yes")
+                , ("ADD", "110010100001", "yes"), ("ADD", "110010100000", "no"), ("ADD", "000011101000", "yes") ] ]
