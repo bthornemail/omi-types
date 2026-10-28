@@ -13,7 +13,7 @@
 | `OMI.BIOS` | `Endpoint`, `Interior`, `GatePath`, `BIOS`, `BootKernel` | Part VIII: `Path` → `GatePath`, `Kernel` → `BootKernel` to avoid clashes |
 | `OMI.Torus` | `Scope`, `Shape`, `Cell`, `Distance`, `Weight` | Part IX: distances and weights are enums, not integers |
 | `OMI.Protocol` | `Protocol` | Part X: declarations are `SExpr`, decided by the canvas pipeline |
-| `OMI.Types` | every type above and the canvas types | Part XI: one import |
+| `OMI.Types` | every type exported in `src/OMI` (99): the three distinct `Bool`s and the second `DecisionTable` as `FanoBool`, `LispBool`, `RelationBool`, `LispDecisionTable` | Part XI: one import |
 
 Also carried from the earlier merge of the `omi` reference: `OMI.Bits`, `OMI.Delta`.
 
