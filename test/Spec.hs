@@ -74,6 +74,7 @@ main = do
   testWsnCasts
   testWsnStackUnderCasts
   testWsnLogic
+  testWsnExpandsOnce
 
 testGaugeOperators :: IO ()
 testGaugeOperators =
@@ -877,3 +878,22 @@ testWsnLogic = do
                 [ ("XOR", "011", "yes"), ("XOR", "010", "no"), ("XNOR", "111", "yes")
                 , ("FULLADDER", "11101", "no"), ("FULLADDER", "11111", "yes"), ("FULLADDER", "01101", "yes")
                 , ("ADD", "110010100001", "yes"), ("ADD", "110010100000", "no"), ("ADD", "000011101000", "yes") ] ]
+
+-- never the same step twice: each production at each place expanded once, as many as zlazy
+-- reported in Plan 9 ("N expanded of P productions x Q positions"), sentence by sentence
+testWsnExpandsOnce :: IO ()
+testWsnExpandsOnce = do
+  let stack = wsnParse (unlines
+        [ "STACK = EMPTY ."
+        , "EMPTY = [ \"in\" \"?\" HELD ] ."
+        , "HELD = HELDCONSONANT | HELDVOWEL | HELDDIGIT ." ])
+      under z = WSN.extend stack (WSN.cast (wsnBytes z))
+      count z t = length (WSN.expanded (under z) (wsnBytes "STACK") (wsnBytes t))
+      long1 = "in?Yout!Yin?Hout!Hin?Wout!Win?Hout!H"
+      long2 = "in?Yout!Yin?aout!ain?Hout!Hin?Wout!Win?eout!ein?Hout!H"
+      zlazy =
+        [ ("YHWH", "in?Y", 4), ("YHWH", "in?Yout!Y", 5), ("YHWH", "in?Yout!H", 4), ("YHWH", "in?a", 4)
+        , ("YHWH", "in?aout!a", 4), ("YHWH", "in?aout!A", 4), ("YHWH", long1, 14), ("YHWH", long2, 7)
+        , ("YAHWEH", "in?Y", 5), ("YAHWEH", "in?Yout!Y", 6), ("YAHWEH", "in?Yout!H", 5), ("YAHWEH", "in?a", 5)
+        , ("YAHWEH", "in?aout!a", 6), ("YAHWEH", "in?aout!A", 5), ("YAHWEH", long1, 18), ("YAHWEH", long2, 26) ]
+  sequence_ [ assertEqualString (z ++ " " ++ t ++ " expansions") (show n) (show (count z t)) | (z, t, n) <- zlazy ]

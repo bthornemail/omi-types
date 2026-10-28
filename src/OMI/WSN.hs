@@ -30,6 +30,7 @@ module OMI.WSN
   , render
   , extend
   , accepts
+  , expanded
   , cast
   ) where
 
@@ -306,16 +307,33 @@ extend (Syntax a) (Syntax b) = Syntax (append a b)
 -- | Where a match may end, and whether it took anything.
 data Reach = Reach [Byte] Answer
 
--- | Does the sentence belong to the production, as zlazy asks? An identifier
---   with no production matches nothing. An identifier met again before any
---   character is taken is not expanded again (it would only repeat).
+-- | A production met at a place (the rest of the sentence there), and where
+--   it may end: one row of the table a question keeps.
+data Memo = Memo [Byte] [Byte] [Reach]
+
+-- | Does the sentence belong to the production, as zlazy asks? Two rules,
+--   Henderson and Morris's for a lazy evaluator: a step is taken only when
+--   the question reaches it, and never twice, since each production met at
+--   a place is expanded once and its ends kept in the table. An identifier
+--   with no production matches nothing; one met again before any character
+--   is taken is not expanded again (it would only repeat).
 accepts :: Syntax -> [Byte] -> [Byte] -> Answer
-accepts g name s = foldrL whole No (factorR g [] (Ident name) s)
+accepts g name s = foldrL whole No (reaches g name s)
   where
     -- a right fold: the first reach that takes the whole sentence answers,
     -- and the reaches after it are never built
     whole (Reach [] _) _ = Yes
     whole _ rest = rest
+
+-- | The productions expanded to answer, one per production and place, in
+--   the order first met: as many as zlazy reports expanded.
+expanded :: Syntax -> [Byte] -> [Byte] -> [[Byte]]
+expanded g name s = case factorR g [] (Ident name) s [] of
+  (_, table) -> mapL (\(Memo n _ _) -> n) table
+
+reaches :: Syntax -> [Byte] -> [Byte] -> [Reach]
+reaches g name s = case factorR g [] (Ident name) s [] of
+  (rs, _) -> rs
 
 lookupP :: Syntax -> [Byte] -> Read Expression
 lookupP (Syntax []) _ = NoRead
@@ -323,41 +341,72 @@ lookupP (Syntax (Production n e : ps)) m = case eqBytes n m of
   Yes -> Read e
   No -> lookupP (Syntax ps) m
 
-expressionR :: Syntax -> [[Byte]] -> Expression -> [Byte] -> [Reach]
-expressionR g seen (Expression ts) s = concatL (mapL (\t -> termR g seen t s) ts)
+-- | The row for a production at a place, if the table has one.
+recall :: [Memo] -> [Byte] -> [Byte] -> Read [Reach]
+recall [] _ _ = NoRead
+recall (Memo n at rs : ms) m s = case both (eqBytes n m) (eqBytes at s) of
+  Yes -> Read rs
+  No -> recall ms m s
 
-termR :: Syntax -> [[Byte]] -> Term -> [Byte] -> [Reach]
-termR _ _ (Term []) s = [Reach s No]
-termR g seen (Term (f : fs)) s = concatL (mapL next (factorR g seen f s))
+-- | Each item in turn, the table carried from one to the next; the reaches
+--   are joined lazily, so a right fold over them may stop before the rest.
+thread :: (a -> [Memo] -> ([Reach], [Memo])) -> [a] -> [Memo] -> ([Reach], [Memo])
+thread _ [] t = ([], t)
+thread f (x : xs) t = case f x t of
+  (r1, t1) -> case thread f xs t1 of
+    (r2, t2) -> (append r1 r2, t2)
+
+expressionR :: Syntax -> [[Byte]] -> Expression -> [Byte] -> [Memo] -> ([Reach], [Memo])
+expressionR g seen (Expression ts) s = thread (\t -> termR g seen t s) ts
+
+termR :: Syntax -> [[Byte]] -> Term -> [Byte] -> [Memo] -> ([Reach], [Memo])
+termR _ _ (Term []) s t = ([Reach s No], t)
+termR g seen (Term (f : fs)) s t = case factorR g seen f s t of
+  (firsts, t1) -> thread next firsts t1
   where
-    next (Reach r took) =
+    next (Reach r took) t' =
       let seen' = case took of
             Yes -> []
             No -> seen
-      in mapL (\(Reach r' took') -> Reach r' (either' took took')) (termR g seen' (Term fs) r)
+      in case termR g seen' (Term fs) r t' of
+        (rs, t'') -> (mapL (\(Reach r' took') -> Reach r' (either' took took')) rs, t'')
 
-factorR :: Syntax -> [[Byte]] -> Factor -> [Byte] -> [Reach]
-factorR g seen (Ident n) s = case seenBefore seen of
-  Yes -> []
-  No -> case lookupP g n of
-    Read e -> expressionR g (n : seen) e s
-    NoRead -> []
+factorR :: Syntax -> [[Byte]] -> Factor -> [Byte] -> [Memo] -> ([Reach], [Memo])
+factorR g seen (Ident n) s t = case seenBefore seen of
+  Yes -> ([], t)
+  No -> case recall t n s of
+    Read rs -> (rs, t)
+    NoRead -> case lookupP g n of
+      NoRead -> ([], t)
+      Read e -> case expressionR g (n : seen) e s (append t [Memo n s []]) of
+        (rs, t1) -> (rs, settle t1)
+          where
+            -- the row was opened before expanding, so the expansion order is
+            -- the order first met; now it holds the ends found
+            settle [] = []
+            settle (m@(Memo n' at _) : ms) = case both (eqBytes n' n) (eqBytes at s) of
+              Yes -> Memo n s rs : ms
+              No -> m : settle ms
   where
     seenBefore [] = No
     seenBefore (m : ms) = either' (eqBytes m n) (seenBefore ms)
-factorR _ _ (Lit l) s = prefix l s
+factorR _ _ (Lit l) s t = (prefix l s, t)
   where
     prefix [] r = [Reach r Yes]
     prefix (c : cs) (d : ds) = case eqByte c d of
       Yes -> prefix cs ds
       No -> []
     prefix _ [] = []
-factorR g seen (Opt e) s = Reach s No : expressionR g seen e s
-factorR g seen (Group e) s = expressionR g seen e s
-factorR g seen (Rep e) s = Reach s No : concatL (mapL again (expressionR g seen e s))
+factorR g seen (Opt e) s t = case expressionR g seen e s t of
+  (rs, t1) -> (Reach s No : rs, t1)
+factorR g seen (Group e) s t = expressionR g seen e s t
+factorR g seen (Rep e) s t = case expressionR g seen e s t of
+  (rs, t1) -> case thread again rs t1 of
+    (more, t2) -> (Reach s No : more, t2)
   where
-    again (Reach r Yes) = mapL (\(Reach r' _) -> Reach r' Yes) (factorR g [] (Rep e) r)
-    again (Reach _ No) = []
+    again (Reach r Yes) t' = case factorR g [] (Rep e) r t' of
+      (rs', t'') -> (mapL (\(Reach r' _) -> Reach r' Yes) rs', t'')
+    again (Reach _ No) t' = ([], t')
 
 -- ---------------------------------------------------------------- cast
 
