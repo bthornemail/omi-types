@@ -85,6 +85,7 @@ main = do
   testPolytopeTransforms
   testPatricia
   testConsensus
+  testStellaOctangula
 
 testGaugeOperators :: IO ()
 testGaugeOperators =
@@ -1188,3 +1189,31 @@ testConsensus = do
     (conName (Con.proofSolid proof) ++ " " ++ show (fromW16 (Con.proofDegree proof)) ++ " "
       ++ show (fromW16 (Con.proofFourYes proof)) ++ " " ++ show (fromW16 (Con.proofDN proof)) ++ " "
       ++ wsnAnswer (Con.proofVerdict proof))
+
+-- The stellated tetrahedron in the Miquel configuration (8_3 6_4), boxedPINE proofs
+-- coq/01-incidence/MiquelIncidenceBalancesFlags.v and docs/MIQUEL-KERNEL.md: the points are the
+-- 3-bit words, idx = 4x + 2y + z, the circles the cube's faces, the points with one bit fixed.
+-- Split by parity, the XOR of a word's bits, the eight are two tetrahedra; a one-bit flip swaps
+-- them (I-112: stellated tetrahedron; swap = presentation).
+testStellaOctangula :: IO ()
+testStellaOctangula = do
+  let points = [0 .. 7] :: [Int]
+      parity w = HostBits.popCount w `mod` 2
+      [evenT, oddT] = [[w | w <- points, parity w == k] | k <- [0, 1]]
+      circles = [[w | w <- points, HostBits.testBit w b == v] | b <- [0, 1, 2], v <- [False, True]]
+      pairs t = [(a, b) | a <- t, b <- t, a < b]
+      flip1 w = HostBits.xor w 1
+  assertHostTrue "the Miquel configuration: 8 points, 6 circles of 4, each point on 3, 24 flags"
+    (length circles == 6 && all ((== 4) . length) circles
+      && all (\w -> length (filter (w `elem`) circles) == 3) points && sum (map length circles) == 24)
+  assertHostTrue "by parity the 8 points are two tetrahedra of 4: 0 3 5 6 and 1 2 4 7"
+    (evenT == [0, 3, 5, 6] && oddT == [1, 2, 4, 7])
+  assertHostTrue "each tetrahedron's 6 edges are face diagonals: its points differ in exactly two bits"
+    (all (\t -> length (pairs t) == 6 && all (\(a, b) -> HostBits.popCount (HostBits.xor a b) == 2) (pairs t)) [evenT, oddT])
+  assertHostTrue "each circle holds one edge of each tetrahedron: two points of each parity"
+    (all (\c -> length (filter (`elem` evenT) c) == 2 && length (filter (`elem` oddT) c) == 2) circles)
+  assertHostTrue "a one-bit flip swaps the two tetrahedra and sends every circle to a circle"
+    (DL.sort (map flip1 evenT) == oddT
+      && all (\c -> DL.sort (map flip1 c) `elem` map DL.sort circles) circles)
+  assertHostTrue "falsifier: a flip of two bits keeps each tetrahedron, it does not swap them"
+    (DL.sort (map (HostBits.xor 3) evenT) == evenT)
