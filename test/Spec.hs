@@ -77,6 +77,7 @@ main = do
   testWsnLogic
   testWsnExpandsOnce
   testPolytopeLaws
+  testPolytopeBetti
 
 testGaugeOperators :: IO ()
 testGaugeOperators =
@@ -932,3 +933,43 @@ testPolytopeLaws = do
   assertEqualInt "the multiplier: 3 x 20" 60 (fromW16 (Poly.mulW16 (toW16 3) (toW16 20)))
   let _ = [Poly.Vertex2 (toW16 1) (toW16 2), Poly.Vertex3 (toW16 1) (toW16 2) (toW16 3)]
   putStrLn "polytope: the showcase's PolyStructure and Vertex, one type each, under Euler, Euler-Poincare and {p, q}"
+
+-- Betti numbers computed over Z/2, not declared (OMI.Polytope.betti, after
+-- waveform-core's reduction), on complexes derived from bits: the tetrahedron, every
+-- triple of four vertices; the cube, the 3-bit words, edges one bit apart, faces one
+-- bit fixed; the octahedron, the cube's dual; and a torus, a 3 x 3 grid glued at its
+-- edges, which must not come out as a sphere.
+testPolytopeBetti :: IO ()
+testPolytopeBetti = do
+  let row n ks = [if k `elem` ks then I else O | k <- [0 .. n - 1]]
+      edgeIndex es (a, b) = head [i | (i, (x, y)) <- zip [0 ..] es, (x, y) == (a, b) || (x, y) == (b, a)]
+      complex nv es fs = (Poly.Counts (toW16 nv) (toW16 (length es)) (toW16 (length fs)),
+                          [row nv [a, b] | (a, b) <- es],
+                          [row (length es) (map (edgeIndex es) f) | f <- fs])
+      cycleEdges vs = zip vs (tail vs ++ [head vs])
+      bettiOf (cs, d1, d2) = case Poly.betti cs d1 d2 of
+        Poly.Betti b0 b1 b2 -> (fromW16 b0, fromW16 b1, fromW16 b2)
+      tetra = complex 4 [(a, b) | a <- [0 .. 3], b <- [a + 1 .. 3]]
+                [cycleEdges [a, b, c] | a <- [0 .. 3], b <- [a + 1 .. 3], c <- [b + 1 .. 3]]
+      cubeV = [0 .. 7] :: [Int]
+      cubeE = [(a, b) | a <- cubeV, b <- cubeV, a < b, HostBits.popCount (a `HostBits.xor` b) == 1]
+      cubeF = [cycleEdges [base, base `HostBits.xor` m1, base `HostBits.xor` m1 `HostBits.xor` m2, base `HostBits.xor` m2]
+              | bit <- [0, 1, 2], val <- [0, 1], let m1 = HostBits.shiftL 1 ((bit + 1) `mod` 3), let m2 = HostBits.shiftL 1 ((bit + 2) `mod` 3),
+                let base = if val == 1 then HostBits.shiftL 1 bit else 0]
+      cube = complex 8 cubeE cubeF
+      octV = [(bit, val) | bit <- [0, 1, 2], val <- [0, 1]] :: [(Int, Int)]
+      octIx = zip octV [0 ..]
+      ix v = head [i | (w, i) <- octIx, w == v]
+      octE = [(ix a, ix b) | (a, b) <- [(a, b) | a <- octV, b <- octV, fst a < fst b]]
+      octF = [cycleEdges [ix (0, x), ix (1, y), ix (2, z)] | x <- [0, 1], y <- [0, 1], z <- [0, 1]]
+      octa = complex 6 octE octF
+      tv i j = (i `mod` 3) * 3 + (j `mod` 3)
+      torusE = concat [[(tv i j, tv i (j + 1)), (tv i j, tv (i + 1) j)] | i <- [0 .. 2], j <- [0 .. 2]]
+      torusF = [cycleEdges [tv i j, tv i (j + 1), tv (i + 1) (j + 1), tv (i + 1) j] | i <- [0 .. 2], j <- [0 .. 2]]
+      torus = complex 9 torusE torusF
+  assertEqualString "tetrahedron: 4 6 4" "(1,0,1)" (show (bettiOf tetra))
+  assertEqualString "cube: 8 12 6, derived from the 3-bit words" "(1,0,1)" (show (bettiOf cube))
+  assertEqualString "octahedron: 6 12 8, the cube's dual" "(1,0,1)" (show (bettiOf octa))
+  assertEqualString "the falsifier, a torus: 9 18 9, not a sphere" "(1,2,1)" (show (bettiOf torus))
+  assertEqualInt "rank over Z/2 of three rows that sum to zero" 2 (fromW16 (Poly.rank [[I, I, O], [O, I, I], [I, O, I]]))
+  putStrLn "polytope: Betti numbers computed over Z/2: the tetrahedron, cube and octahedron are (1,0,1), as the templates declare; a torus is (1,2,1)"

@@ -15,6 +15,13 @@
 --   > eulerPoincare  V - E + F = b0 - b1 + b2, as V + F + b1 = E + b0 + b2
 --   > regular        p F = 2 E = q V, the Schlafli symbol {p, q}
 --
+--   And the Betti numbers computed, not declared, over Z/2 as
+--   waveform-core computes them (Waveform/Topology/Persistence.hs: a column a
+--   set of rows, two columns added by symmetric difference, XOR), on a solid's
+--   cell complex: 'betti' takes the counts and the boundary matrices (an edge's
+--   row over the vertices, a face's row over the edges) and gives
+--   b_k = dim C_k - rank d_k - rank d_(k+1), with 'rank' by elimination on bits.
+--
 --   Both templates' universalSpin multiplies by the sign of V - E + F minus
 --   b0 - b1 + b2, which 'eulerPoincare' says is zero for every polyhedron: it
 --   is nonzero only for counts that are not one.
@@ -24,6 +31,8 @@ module OMI.Polytope
   , Betti(..)
   , PolyStructure(..)
   , Vertex(..)
+  , betti
+  , rank
   , euler
   , eulerPoincare
   , regular
@@ -128,3 +137,62 @@ eulerPoincare (PolyStructure (Counts v e f) _ (Betti b0 b1 b2)) =
 regular :: PolyStructure -> Answer
 regular (PolyStructure (Counts v e f) (Schlafli p q) _) =
   both (eqW16 (mulW16 p f) (addW16 e e)) (eqW16 (mulW16 q v) (addW16 e e))
+
+-- | Rank over Z/2 of rows of bits, by elimination: a row with I in the first
+--   column is the pivot, XORed into every other such row; then the column goes.
+rank :: [[Bit]] -> Word16
+rank rows = case dropZero rows of
+  [] -> word []
+  live -> go live
+  where
+    go rs = case pivot rs of
+      Found p others -> addW16 (word one) (rank (map tl (eliminate p others)))
+      None -> rank (map tl rs)
+    one = [O, O, O, O, O, O, O, O, O, O, O, O, O, O, O, I]
+    eliminate p (r@(I : _) : rest) = xorRow p r : eliminate p rest
+    eliminate p (r : rest) = r : eliminate p rest
+    eliminate _ [] = []
+    tl (_ : xs) = xs
+    tl [] = []
+    map f (x : xs) = f x : map f xs
+    map _ [] = []
+
+data Pivot = Found [Bit] [[Bit]] | None
+
+pivot :: [[Bit]] -> Pivot
+pivot (r@(I : _) : rest) = Found r rest
+pivot (r : rest) = case pivot rest of
+  Found p others -> Found p (r : others)
+  None -> None
+pivot [] = None
+
+xorRow :: [Bit] -> [Bit] -> [Bit]
+xorRow (a : as) (b : bs) = xorBit a b : xorRow as bs
+xorRow _ _ = []
+
+dropZero :: [[Bit]] -> [[Bit]]
+dropZero (r : rest) = case zero r of
+  Yes -> dropZero rest
+  No -> r : dropZero rest
+  where
+    zero (I : _) = No
+    zero (O : xs) = zero xs
+    zero [] = Yes
+dropZero [] = []
+
+-- | a - b, modulo 2^16: a plus the complement of b plus one.
+subW16 :: Word16 -> Word16 -> Word16
+subW16 a b = addW16 a (addW16 (word (complement (bits b))) (word [O, O, O, O, O, O, O, O, O, O, O, O, O, O, O, I]))
+  where
+    complement (I : xs) = O : complement xs
+    complement (O : xs) = I : complement xs
+    complement [] = []
+
+-- | b0, b1, b2 of a 2-dimensional cell complex from its counts and its
+--   boundary matrices: d1, one row per edge over the vertices; d2, one row
+--   per face over the edges.
+betti :: Counts -> [[Bit]] -> [[Bit]] -> Betti
+betti (Counts v e f) d1 d2 = Betti (subW16 v r1) (subW16 (subW16 e r1) r2) (subW16 f r2)
+  where
+    r1 = rank d1
+    r2 = rank d2
