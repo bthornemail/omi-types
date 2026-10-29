@@ -22,6 +22,15 @@
 --   row over the vertices, a face's row over the edges) and gives
 --   b_k = dim C_k - rank d_k - rank d_(k+1), with 'rank' by elimination on bits.
 --
+--   And the degree signature, the author's rule from Shape Signature
+--   (/home/main/devops/Shape Signature, AWK Platonic Class Validator v0.1, a
+--   year and some fifty versions back): "We don't name solids. We classify by
+--   relational degree signatures." 'signature' reads it from the same
+--   incidence: each vertex's degree a column count of d1, each face's degree a
+--   row count of d2; 'Uniform' {p, q} when every face has p edges and every
+--   vertex q, 'Mixed' when not. A uniform signature alone is not a Platonic
+--   solid (a torus can be {4, 4}); its Betti numbers must be (1, 0, 1) too.
+--
 --   Both templates' universalSpin multiplies by the sign of V - E + F minus
 --   b0 - b1 + b2, which 'eulerPoincare' says is zero for every polyhedron: it
 --   is nonzero only for counts that are not one.
@@ -33,6 +42,8 @@ module OMI.Polytope
   , Vertex(..)
   , betti
   , rank
+  , Signature(..)
+  , signature
   , euler
   , eulerPoincare
   , regular
@@ -196,3 +207,47 @@ betti (Counts v e f) d1 d2 = Betti (subW16 v r1) (subW16 (subW16 e r1) r2) (subW
   where
     r1 = rank d1
     r2 = rank d2
+
+data Signature = Uniform Schlafli | Mixed
+
+-- | The number of I in a row, as a Word16.
+ones :: [Bit] -> Word16
+ones (I : xs) = addW16 (word [O, O, O, O, O, O, O, O, O, O, O, O, O, O, O, I]) (ones xs)
+ones (O : xs) = ones xs
+ones [] = word []
+
+-- | The columns of rows of equal length.
+transpose :: [[Bit]] -> [[Bit]]
+transpose rows = case heads rows of
+  Found h rest -> h : transpose rest
+  None -> []
+  where
+    heads (r : rs) = case r of
+      (x : xs) -> case heads rs of
+        Found h t -> Found (x : h) (xs : t)
+        None -> case rs of
+          [] -> Found [x] [xs]
+          _ -> None
+      [] -> None
+    heads [] = None
+
+-- | Every word of a list equal to the first: that word, or none.
+same :: [Word16] -> Pivot
+same (w : ws) = go ws
+  where
+    go (x : xs) = case eqW16 w x of
+      Yes -> go xs
+      No -> None
+    go [] = Found (bits w) []
+same [] = None
+
+-- | The degree signature from d1 (edges over vertices) and d2 (faces over edges).
+signature :: [[Bit]] -> [[Bit]] -> Signature
+signature d1 d2 = case same (mapOnes d2) of
+  Found p _ -> case same (mapOnes (transpose d1)) of
+    Found q _ -> Uniform (Schlafli (word p) (word q))
+    None -> Mixed
+  None -> Mixed
+  where
+    mapOnes (r : rs) = ones r : mapOnes rs
+    mapOnes [] = []

@@ -78,6 +78,7 @@ main = do
   testWsnExpandsOnce
   testPolytopeLaws
   testPolytopeBetti
+  testPolytopeSignature
 
 testGaugeOperators :: IO ()
 testGaugeOperators =
@@ -973,3 +974,37 @@ testPolytopeBetti = do
   assertEqualString "the falsifier, a torus: 9 18 9, not a sphere" "(1,2,1)" (show (bettiOf torus))
   assertEqualInt "rank over Z/2 of three rows that sum to zero" 2 (fromW16 (Poly.rank [[I, I, O], [O, I, I], [I, O, I]]))
   putStrLn "polytope: Betti numbers computed over Z/2: the tetrahedron, cube and octahedron are (1,0,1), as the templates declare; a torus is (1,2,1)"
+
+-- The degree signature (Shape Signature's rule: classify by degree, do not name),
+-- read from the incidence the Betti test derives: the tetrahedron {3, 3}, the cube
+-- {4, 3}, the octahedron {3, 4}; a torus grid {4, 4}, uniform but no sphere; a square
+-- pyramid, mixed (its apex of degree 4, its base corners of degree 3).
+testPolytopeSignature :: IO ()
+testPolytopeSignature = do
+  let row n ks = [if k `elem` ks then I else O | k <- [0 .. n - 1]]
+      edgeIndex es (a, b) = fst (Prelude.head [(i, ()) | (i, (x, y)) <- zip [0 :: Int ..] es, (x, y) == (a, b) || (x, y) == (b, a)])
+      mats nv es fs = ([row nv [a, b] | (a, b) <- es], [row (length es) (map (edgeIndex es) f) | f <- fs])
+      cyc vs = zip vs (drop 1 vs ++ take 1 vs)
+      sig (d1, d2) = case Poly.signature d1 d2 of
+        Poly.Uniform (Poly.Schlafli p q) -> "{" ++ show (fromW16 p) ++ "," ++ show (fromW16 q) ++ "}"
+        Poly.Mixed -> "mixed"
+      tetra = mats 4 [(a, b) | a <- [0 .. 3], b <- [a + 1 .. 3]] [cyc [a, b, c] | a <- [0 .. 3], b <- [a + 1 .. 3], c <- [b + 1 .. 3 :: Int]]
+      cubeE = [(a, b) | a <- [0 .. 7], b <- [0 .. 7], a < b, HostBits.popCount (a `HostBits.xor` b) == (1 :: Int)] :: [(Int, Int)]
+      cubeF = [cyc [base, base `HostBits.xor` m1, base `HostBits.xor` m1 `HostBits.xor` m2, base `HostBits.xor` m2]
+              | bt <- [0, 1, 2], v <- [0, 1 :: Int], let m1 = HostBits.shiftL 1 ((bt + 1) `mod` 3), let m2 = HostBits.shiftL 1 ((bt + 2) `mod` 3),
+                let base = if v == 1 then HostBits.shiftL 1 bt else 0] :: [[(Int, Int)]]
+      cube = mats 8 cubeE cubeF
+      octV = [(bt, v) | bt <- [0, 1, 2], v <- [0, 1]] :: [(Int, Int)]
+      ix w = fst (Prelude.head [(i, ()) | (i, u) <- zip [0 :: Int ..] octV, u == w])
+      octa = mats 6 [(ix a, ix b) | a <- octV, b <- octV, fst a < fst b] [cyc [ix (0, x), ix (1, y), ix (2, z)] | x <- [0, 1], y <- [0, 1], z <- [0, 1]]
+      tv i j = (i `mod` 3) * 3 + (j `mod` 3)
+      torus = mats 9 (concat [[(tv i j, tv i (j + 1)), (tv i j, tv (i + 1) j)] | i <- [0 .. 2], j <- [0 .. 2]])
+                [cyc [tv i j, tv i (j + 1), tv (i + 1) (j + 1), tv (i + 1) j] | i <- [0 .. 2], j <- [0 .. 2 :: Int]]
+      pyramid = mats 5 [(0, 1), (1, 2), (2, 3), (3, 0), (4, 0), (4, 1), (4, 2), (4, 3)]
+                  [cyc [0, 1, 2, 3], cyc [4, 0, 1], cyc [4, 1, 2], cyc [4, 2, 3], cyc [4, 3, 0 :: Int]]
+  assertEqualString "tetrahedron's signature" "{3,3}" (sig tetra)
+  assertEqualString "cube's signature, from the 3-bit words" "{4,3}" (sig cube)
+  assertEqualString "octahedron's signature, the cube's dual" "{3,4}" (sig octa)
+  assertEqualString "a torus grid is uniform, {4,4}, and no sphere" "{4,4}" (sig torus)
+  assertEqualString "a square pyramid is mixed" "mixed" (sig pyramid)
+  putStrLn "polytope: degree signatures read from incidence: {3,3} {4,3} {3,4}; a torus {4,4}; a square pyramid mixed"
