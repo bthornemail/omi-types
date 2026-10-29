@@ -2,6 +2,7 @@ module Main where
 
 import Prelude
 import Data.List (intercalate)
+import qualified Data.List as DL
 
 import qualified OMI.Carrier as C
 import qualified OMI.DecisionTable as DT
@@ -79,6 +80,7 @@ main = do
   testPolytopeLaws
   testPolytopeBetti
   testPolytopeSignature
+  testPolytopeTransforms
 
 testGaugeOperators :: IO ()
 testGaugeOperators =
@@ -1008,3 +1010,102 @@ testPolytopeSignature = do
   assertEqualString "a torus grid is uniform, {4,4}, and no sphere" "{4,4}" (sig torus)
   assertEqualString "a square pyramid is mixed" "mixed" (sig pyramid)
   putStrLn "polytope: degree signatures read from incidence: {3,3} {4,3} {3,4}; a torus {4,4}; a square pyramid mixed"
+
+-- Shape Signature's Archimedean transforms and Catalan duals, built from face cycles
+-- alone: truncation (each vertex cut off, each p-gon a 2p-gon), rectification (a vertex
+-- at each edge's middle) and the dual (a vertex per face, a face per vertex). Each
+-- result is measured, never named: its counts, Betti numbers, degree signature and
+-- whether it is vertex-uniform (archimedean) or face-uniform (catalan). The showcase's
+-- rows named Truncated Tetrahedron (24 36 14) and Cuboctahedron (12 18 8) are measured
+-- against the shapes the transforms build.
+type Faces = [[Int]]
+
+polyEdges :: Faces -> [(Int, Int)]
+polyEdges fs = DL.nub [(min a b, max a b) | f <- fs, (a, b) <- zip f (drop 1 f ++ take 1 f)]
+
+polyVerts :: Faces -> [Int]
+polyVerts fs = DL.sort (DL.nub (concat fs))
+
+polyMats :: Faces -> (Poly.Counts, [[Bit]], [[Bit]])
+polyMats fs = (Poly.Counts (toW16 (length vs)) (toW16 (length es)) (toW16 (length fs)), d1, d2)
+  where
+    vs = polyVerts fs
+    es = polyEdges fs
+    row n ks = [if k `elem` ks then I else O | k <- [0 .. n - 1]]
+    vi v = length (takeWhile (/= v) vs)
+    ei e = length (takeWhile (/= e) es)
+    d1 = [row (length vs) [vi a, vi b] | (a, b) <- es]
+    d2 = [row (length es) [ei (min a b, max a b) | (a, b) <- zip f (drop 1 f ++ take 1 f)] | f <- fs]
+
+-- a single cycle from its undirected edges
+chainCycle :: Eq a => [(a, a)] -> [a]
+chainCycle [] = []
+chainCycle ((a, b) : rest) = a : go a b rest
+  where
+    go start cur es
+      | cur == start = []
+      | otherwise = cur : case [(x, y) | (x, y) <- es, x == cur || y == cur] of
+          (e@(x, y) : _) -> go start (if x == cur then y else x) (DL.delete e es)
+          [] -> []
+
+relabel :: Eq a => [[a]] -> Faces
+relabel fss = [[ix x | x <- f] | f <- fss]
+  where
+    keys = DL.nub (concat fss)
+    ix x = length (takeWhile (/= x) keys)
+
+-- the faces around v, in order: neighbours share an edge through v
+around :: Faces -> Int -> [[Int]]
+around fs v = map (fs !!) (chainCycle [(i, j) | (i, fi) <- zip [0 ..] fs, (j, fj) <- zip [0 ..] fs, i < j, v `elem` fi, v `elem` fj, shared fi fj])
+  where
+    shared fi fj = any (\w -> w /= v && w `elem` fi && w `elem` fj && adjacent fi w && adjacent fj w) (fi ++ fj)
+    adjacent f w = (min v w, max v w) `elem` polyEdges [f]
+
+polyDual :: Faces -> Faces
+polyDual fs = [[ix f | f <- around fs v] | v <- polyVerts fs]
+  where
+    ix f = length (takeWhile (/= f) fs)
+
+polyTruncate :: Faces -> Faces
+polyTruncate fs = relabel (big ++ small)
+  where
+    big = [concat [[(a, b), (b, a)] | (a, b) <- zip f (drop 1 f ++ take 1 f)] | f <- fs]
+    small = [chainCycle [((v, a), (v, b)) | f <- fs, (a, v, b) <- triples f, v == u] | u <- polyVerts fs]
+    triples f = zip3 (drop (length f - 1) f ++ take (length f - 1) f) f (drop 1 f ++ take 1 f)
+
+polyRectify :: Faces -> Faces
+polyRectify fs = relabel (big ++ small)
+  where
+    edge a b = (min a b, max a b)
+    big = [[edge a b | (a, b) <- zip f (drop 1 f ++ take 1 f)] | f <- fs]
+    small = [chainCycle [(edge a v, edge v b) | f <- fs, (a, v', b) <- triples f, v' == u, let v = u] | u <- polyVerts fs]
+    triples f = zip3 (drop (length f - 1) f ++ take (length f - 1) f) f (drop 1 f ++ take 1 f)
+
+testPolytopeTransforms :: IO ()
+testPolytopeTransforms = do
+  let tetraF = [[0, 1, 2], [0, 3, 1], [1, 3, 2], [0, 2, 3]] :: Faces
+      cubeF = [[b, b `HostBits.xor` m1, b `HostBits.xor` m1 `HostBits.xor` m2, b `HostBits.xor` m2]
+              | bt <- [0, 1, 2], v <- [0, 1 :: Int], let m1 = HostBits.shiftL 1 ((bt + 1) `mod` 3), let m2 = HostBits.shiftL 1 ((bt + 2) `mod` 3),
+                let b = if v == 1 then HostBits.shiftL 1 bt else 0] :: Faces
+      yes WSN.Yes = True
+      yes WSN.No = False
+      measure fs = case polyMats fs of
+        (cs@(Poly.Counts v e f), d1, d2) ->
+          ( (fromW16 v, fromW16 e, fromW16 f)
+          , case Poly.betti cs d1 d2 of Poly.Betti a b c -> (fromW16 a, fromW16 b, fromW16 c)
+          , case Poly.signature d1 d2 of
+              Poly.Uniform (Poly.Schlafli p q) -> "{" ++ show (fromW16 p) ++ "," ++ show (fromW16 q) ++ "}"
+              Poly.Mixed -> "mixed"
+          , yes (Poly.archimedean d1 d2), yes (Poly.catalan d1 d2) )
+      check name fs expected = assertEqualString name (show expected) (show (measure fs))
+  check "the tetrahedron" tetraF ((4, 6, 4), (1, 0, 1), "{3,3}", True, True)
+  check "the cube" cubeF ((8, 12, 6), (1, 0, 1), "{4,3}", True, True)
+  check "the dual of the cube is an octahedron" (polyDual cubeF) ((6, 12, 8), (1, 0, 1), "{3,4}", True, True)
+  check "the truncated tetrahedron, built: 12 18 8, vertex-uniform (3.6.6)" (polyTruncate tetraF) ((12, 18, 8), (1, 0, 1), "mixed", True, False)
+  check "the truncated cube, built: 24 36 14 (3.8.8)" (polyTruncate cubeF) ((24, 36, 14), (1, 0, 1), "mixed", True, False)
+  check "the cuboctahedron, the cube rectified: 12 24 14 (3.4.3.4)" (polyRectify cubeF) ((12, 24, 14), (1, 0, 1), "mixed", True, False)
+  check "the triakis tetrahedron, the truncated tetrahedron's dual: Catalan, face-uniform" (polyDual (polyTruncate tetraF)) ((8, 18, 12), (1, 0, 1), "mixed", False, True)
+  check "the triakis octahedron, the truncated cube's dual: Catalan, face-uniform" (polyDual (polyTruncate cubeF)) ((14, 36, 24), (1, 0, 1), "mixed", False, True)
+  assertHostFalse "the showcase's Truncated Tetrahedron row (24 36 14) is not the truncated tetrahedron built (12 18 8)" ((24, 36, 14) == (12 :: Int, 18 :: Int, 8 :: Int))
+  assertHostFalse "the showcase's Cuboctahedron row (12 18 8) is not the cuboctahedron built (12 24 14)" ((12, 18, 8) == (12 :: Int, 24 :: Int, 14 :: Int))
+  putStrLn "polytope: truncation, rectification and the dual, built and measured: Archimedean shapes vertex-uniform, their Catalan duals face-uniform, every one Betti (1,0,1)"

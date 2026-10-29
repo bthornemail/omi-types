@@ -31,6 +31,12 @@
 --   vertex q, 'Mixed' when not. A uniform signature alone is not a Platonic
 --   solid (a torus can be {4, 4}); its Betti numbers must be (1, 0, 1) too.
 --
+--   Shape Signature's Archimedean and Catalan classes, from the same incidence:
+--   'archimedean' when every vertex has the same multiset of face sizes around it
+--   (its vertex configuration, 3.6.6 for the truncated tetrahedron), 'catalan'
+--   when every face has the same multiset of vertex degrees on it (the dual
+--   condition, which the Catalan solids, the Archimedean duals, keep).
+--
 --   Both templates' universalSpin multiplies by the sign of V - E + F minus
 --   b0 - b1 + b2, which 'eulerPoincare' says is zero for every polyhedron: it
 --   is nonzero only for counts that are not one.
@@ -44,6 +50,8 @@ module OMI.Polytope
   , rank
   , Signature(..)
   , signature
+  , archimedean
+  , catalan
   , euler
   , eulerPoincare
   , regular
@@ -251,3 +259,71 @@ signature d1 d2 = case same (mapOnes d2) of
   where
     mapOnes (r : rs) = ones r : mapOnes rs
     mapOnes [] = []
+
+-- | Bitwise OR of two rows.
+orRow :: [Bit] -> [Bit] -> [Bit]
+orRow (O : as) (O : bs) = O : orRow as bs
+orRow (_ : as) (_ : bs) = I : orRow as bs
+orRow _ _ = []
+
+-- | The rows a mask selects.
+select :: [Bit] -> [a] -> [a]
+select (I : ms) (r : rs) = r : select ms rs
+select (O : ms) (_ : rs) = select ms rs
+select _ _ = []
+
+-- | Each face's vertices: the OR of its edges' rows of d1.
+faceVertices :: [[Bit]] -> [[Bit]] -> [[Bit]]
+faceVertices d1 (f : fs) = orAll (select f d1) : faceVertices d1 fs
+  where
+    orAll (r : rs) = case rs of
+      [] -> r
+      _ -> orRow r (orAll rs)
+    orAll [] = []
+faceVertices _ [] = []
+
+-- | a <= b, most significant bit first.
+leW16 :: Word16 -> Word16 -> Answer
+leW16 a b = go (bits a) (bits b)
+  where
+    go (O : _) (I : _) = Yes
+    go (I : _) (O : _) = No
+    go (_ : xs) (_ : ys) = go xs ys
+    go _ _ = Yes
+
+sortW16 :: [Word16] -> [Word16]
+sortW16 (x : xs) = insert x (sortW16 xs)
+  where
+    insert y (z : zs) = case leW16 y z of
+      Yes -> y : z : zs
+      No -> z : insert y zs
+    insert y [] = [y]
+sortW16 [] = []
+
+eqList :: [Word16] -> [Word16] -> Answer
+eqList (x : xs) (y : ys) = both (eqW16 x y) (eqList xs ys)
+eqList [] [] = Yes
+eqList _ _ = No
+
+allEqual :: [[Word16]] -> Answer
+allEqual (c : cs) = go cs
+  where
+    go (d : ds) = both (eqList c d) (go ds)
+    go [] = Yes
+allEqual [] = Yes
+
+mapW :: (a -> b) -> [a] -> [b]
+mapW f (x : xs) = f x : mapW f xs
+mapW _ [] = []
+
+-- | Every vertex has the same multiset of face sizes around it.
+archimedean :: [[Bit]] -> [[Bit]] -> Answer
+archimedean d1 d2 = allEqual (mapW (\around -> sortW16 (select around faceDegrees)) (transpose (faceVertices d1 d2)))
+  where
+    faceDegrees = mapW ones d2
+
+-- | Every face has the same multiset of vertex degrees on it.
+catalan :: [[Bit]] -> [[Bit]] -> Answer
+catalan d1 d2 = allEqual (mapW (\on -> sortW16 (select on vertexDegrees)) (faceVertices d1 d2))
+  where
+    vertexDegrees = mapW ones (transpose d1)
