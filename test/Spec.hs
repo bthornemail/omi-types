@@ -1217,3 +1217,16 @@ testStellaOctangula = do
       && all (\c -> DL.sort (map flip1 c) `elem` map DL.sort circles) circles)
   assertHostTrue "falsifier: a flip of two bits keeps each tetrahedron, it does not swap them"
     (DL.sort (map (HostBits.xor 3) evenT) == evenT)
+  -- I-198: the Fano plane's points are the seven words but 0, its lines the triples s p o with
+  -- s xor p xor o = 0, the Steiner triples S(2,3,7) that are the knowledge triples
+  let fano = [[s, p, HostBits.xor s p] | s <- [1 .. 7], p <- [s + 1 .. 7], HostBits.xor s p > p] :: [[Int]]
+      withNull l = DL.sort (0 : l)
+  assertHostTrue "the seven Steiner triples with s xor p xor o = 0 (I-198)"
+    (fano == [[1, 2, 3], [1, 4, 5], [1, 6, 7], [2, 4, 6], [2, 5, 7], [3, 4, 7], [3, 5, 6]])
+  assertHostTrue "the even tetrahedron 0 3 5 6 is the Fano line 3 5 6 with the null 0"
+    (withNull [3, 5, 6] == evenT && [3, 5, 6] `elem` fano)
+  assertHostTrue "with the null, three lines are the circles through 0, one the even tetrahedron, three neither"
+    (length [l | l <- fano, withNull l `elem` map DL.sort circles] == 3
+      && length [l | l <- fano, withNull l == evenT] == 1)
+  assertHostTrue "falsifier: the odd tetrahedron holds no Steiner triple, its XORs are not 0"
+    (null [l | l <- fano, all (`elem` oddT) l])
