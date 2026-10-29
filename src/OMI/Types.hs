@@ -134,6 +134,12 @@ module OMI.Types
   , Answer(..)
   , Read(..)
   , Syntax
+    -- * Polytope
+  , Counts(..)
+  , Schlafli(..)
+  , Betti(..)
+  , PolyStructure(..)
+  , Vertex(..)
   ) where
 
 import OMI.BIOS
@@ -171,6 +177,7 @@ import OMI.Scope (OmiScope)
 import OMI.Stream (StreamRecognition)
 import OMI.VCS (VCSRecord)
 import OMI.WSN (Answer(..), Read(..), Syntax)
+import OMI.Polytope (Counts(..), Schlafli(..), Betti(..), PolyStructure(..), Vertex(..))
 
 -- | The three Bools and the second DecisionTable, named for their modules.
 type FanoBool = Fano.Bool

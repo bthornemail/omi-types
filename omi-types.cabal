@@ -27,6 +27,7 @@ library
       OMI.Net.Frame
       OMI.Orbit
       OMI.Pipeline
+      OMI.Polytope
       OMI.Protocol
       OMI.Reconcile
       OMI.Relation

@@ -31,6 +31,7 @@ import qualified OMI.Torus as T
 import qualified OMI.Types ()
 import qualified OMI.Try as Try
 import qualified OMI.WSN as WSN
+import qualified OMI.Polytope as Poly
 import qualified Data.Bits as HostBits
 import OMI.Core
 import OMI.Kernel
@@ -75,6 +76,7 @@ main = do
   testWsnStackUnderCasts
   testWsnLogic
   testWsnExpandsOnce
+  testPolytopeLaws
 
 testGaugeOperators :: IO ()
 testGaugeOperators =
@@ -897,3 +899,36 @@ testWsnExpandsOnce = do
         , ("YAHWEH", "in?Y", 5), ("YAHWEH", "in?Yout!Y", 6), ("YAHWEH", "in?Yout!H", 5), ("YAHWEH", "in?a", 5)
         , ("YAHWEH", "in?aout!a", 6), ("YAHWEH", "in?aout!A", 5), ("YAHWEH", long1, 18), ("YAHWEH", long2, 26) ]
   sequence_ [ assertEqualString (z ++ " " ++ t ++ " expansions") (show n) (show (count z t)) | (z, t, n) <- zlazy ]
+
+-- The showcase's polyhedra (unbound/TSX/src/templates/Polyhedral Spin Explorer.tsx,
+-- its nine rows as written: V, E, F, p, q, betti, name) under OMI.Polytope's laws.
+-- Every row keeps Euler and Euler-Poincare, so universalSpin is 0 on each; the three
+-- Archimedean rows carry a Schlafli symbol their counts do not keep, and two of them
+-- carry another solid's counts (truncated tetrahedron 12 18 8, cuboctahedron 12 24 14).
+testPolytopeLaws :: IO ()
+testPolytopeLaws = do
+  let rows =
+        [ (4, 6, 4, 3, 3, "Tetrahedron", True)
+        , (8, 12, 6, 4, 3, "Cube", True)
+        , (6, 12, 8, 3, 4, "Octahedron", True)
+        , (20, 30, 12, 5, 3, "Dodecahedron", True)
+        , (12, 30, 20, 3, 5, "Icosahedron", True)
+        , (24, 36, 14, 4, 3, "Truncated Tetrahedron", False)
+        , (12, 18, 8, 3, 3, "Cuboctahedron", False)
+        , (24, 36, 14, 6, 3, "Truncated Cube", False)
+        , (8, 12, 6, 4, 3, "Custom Shape", True)
+        ] :: [(Int, Int, Int, Int, Int, String, Bool)]
+      poly v e f p q = Poly.PolyStructure (Poly.Counts (toW16 v) (toW16 e) (toW16 f)) (Poly.Schlafli (toW16 p) (toW16 q)) (Poly.Betti (toW16 1) (toW16 0) (toW16 1))
+      yes WSN.Yes = True
+      yes WSN.No = False
+  mapM_ (\(v, e, f, p, q, name, reg) -> do
+    assertHostTrue (name ++ " keeps Euler") (yes (Poly.euler (Poly.Counts (toW16 v) (toW16 e) (toW16 f))))
+    assertHostTrue (name ++ " keeps Euler-Poincare, so universalSpin is 0") (yes (Poly.eulerPoincare (poly v e f p q)))
+    assertHostTrue (name ++ (if reg then " is a regular {p, q}" else " does not keep its {p, q}")) (yes (Poly.regular (poly v e f p q)) == reg)) rows
+  assertHostFalse "V5 E5 F5 is no polyhedron" (yes (Poly.euler (Poly.Counts (toW16 5) (toW16 5) (toW16 5))))
+  assertHostFalse "the row named Truncated Tetrahedron is not the truncated tetrahedron (12 18 8)" ((24, 36, 14) == (12 :: Int, 18 :: Int, 8 :: Int))
+  assertEqualInt "the adder: 180 + 62" 242 (fromW16 (Poly.addW16 (toW16 180) (toW16 62)))
+  assertEqualInt "the multiplier: 5 x 12" 60 (fromW16 (Poly.mulW16 (toW16 5) (toW16 12)))
+  assertEqualInt "the multiplier: 3 x 20" 60 (fromW16 (Poly.mulW16 (toW16 3) (toW16 20)))
+  let _ = [Poly.Vertex2 (toW16 1) (toW16 2), Poly.Vertex3 (toW16 1) (toW16 2) (toW16 3)]
+  putStrLn "polytope: the showcase's PolyStructure and Vertex, one type each, under Euler, Euler-Poincare and {p, q}"
