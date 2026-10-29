@@ -58,6 +58,8 @@ module OMI.Polytope
   , addW16
   , mulW16
   , eqW16
+  , subW16
+  , leW16
   ) where
 
 import OMI.Kernel

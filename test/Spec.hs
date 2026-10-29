@@ -34,6 +34,7 @@ import qualified OMI.Try as Try
 import qualified OMI.WSN as WSN
 import qualified OMI.Polytope as Poly
 import qualified OMI.Patricia as Pat
+import qualified OMI.Consensus as Con
 import qualified Data.Bits as HostBits
 import OMI.Core
 import OMI.Kernel
@@ -83,6 +84,7 @@ main = do
   testPolytopeSignature
   testPolytopeTransforms
   testPatricia
+  testConsensus
 
 testGaugeOperators :: IO ()
 testGaugeOperators =
@@ -1144,3 +1146,45 @@ testPatricia = do
     (init yah `DL.isPrefixOf` yahweh && last yah == '0' && yahweh !! length (init yah) == '1')
   assertHostTrue "a path is static for a vocabulary: a word added changes it only where it differs first"
     (patPath "AND" (patOf ("YAG" : patWords)) == patPath "AND" t && patPath "YAH" (patOf ("YAG" : patWords)) /= yah)
+
+-- h2gnn's geometric consensus (OMI.Consensus): the engine's own 324 decisions (unbound PLAN9
+-- in/cons/decisions, written by its geometric-subsidiarity.ts), each as 4 yes >= d n.
+conName :: Con.Solid -> String
+conName s = case s of
+  Con.Tetrahedron -> "tetrahedron"
+  Con.Cube -> "cube"
+  Con.Octahedron -> "octahedron"
+  Con.Icosahedron -> "icosahedron"
+  Con.Dodecahedron -> "dodecahedron"
+
+conLine :: Con.Proof -> String
+conLine p = conName (Con.proofSolid p) ++ " " ++ wsnAnswer (Con.proofVerdict p)
+
+testConsensus :: IO ()
+testConsensus = do
+  golden <- readFile "test/data/consensus-decisions"
+  let rows = [ (n, y, s ++ " " ++ v) | l <- lines golden, let [n, y, s, v] = words l ]
+      ours = [ (n, y, conLine (Con.decide (toW16 (read n)) (toW16 (read y)))) | (n, y, _) <- rows ]
+  assertEqualInt "the engine's decisions, read" 324 (length rows)
+  assertHostTrue "every decision of the engine, by 4 yes >= d n"
+    (and [ a == b | ((_, _, a), (_, _, b)) <- zip rows ours ])
+  let degreeOf s = fromW16 (Con.degree (Con.schlafli s))
+      solids = [Con.Tetrahedron, Con.Cube, Con.Octahedron, Con.Icosahedron, Con.Dodecahedron]
+  assertHostTrue "d is 3, 2, 2, 1, 1: the thresholds 3/4, 1/2, 1/2, 1/4, 1/4"
+    (map degreeOf solids == [3, 2, 2, 1, 1])
+  assertHostTrue "a solid and its dual have the same d"
+    (and [ degreeOf s == degreeOf (Con.dual s) | s <- solids ])
+  assertHostTrue "read by the octahedron instead of the cube, no decision of 1 to 8 changes"
+    (and [ wsnAnswer (Con.proofVerdict (Con.decideWith Con.Octahedron (toW16 n) (toW16 y)))
+             == wsnAnswer (Con.proofVerdict (Con.decideWith Con.Cube (toW16 n) (toW16 y)))
+         | n <- [1 .. 8], y <- [0 .. n] ])
+  assertHostTrue "falsifier: read by the tetrahedron instead of the cube, decisions change"
+    (or [ wsnAnswer (Con.proofVerdict (Con.decideWith Con.Tetrahedron (toW16 n) (toW16 y)))
+            /= wsnAnswer (Con.proofVerdict (Con.decideWith Con.Cube (toW16 n) (toW16 y)))
+        | n <- [5 .. 8], y <- [0 .. n] ])
+  let proof = Con.decide (toW16 7) (toW16 5)
+  assertEqualString "the proof of 7 with 5 yes: the cube, d 2, 4 yes 20 against d n 14, consensus"
+    "cube 2 20 14 yes"
+    (conName (Con.proofSolid proof) ++ " " ++ show (fromW16 (Con.proofDegree proof)) ++ " "
+      ++ show (fromW16 (Con.proofFourYes proof)) ++ " " ++ show (fromW16 (Con.proofDN proof)) ++ " "
+      ++ wsnAnswer (Con.proofVerdict proof))
