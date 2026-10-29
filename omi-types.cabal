@@ -27,6 +27,7 @@ library
       OMI.Net.Frame
       OMI.Orbit
       OMI.Pipeline
+      OMI.Patricia
       OMI.Polytope
       OMI.Protocol
       OMI.Reconcile

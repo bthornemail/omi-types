@@ -33,6 +33,7 @@ import qualified OMI.Types ()
 import qualified OMI.Try as Try
 import qualified OMI.WSN as WSN
 import qualified OMI.Polytope as Poly
+import qualified OMI.Patricia as Pat
 import qualified Data.Bits as HostBits
 import OMI.Core
 import OMI.Kernel
@@ -81,6 +82,7 @@ main = do
   testPolytopeBetti
   testPolytopeSignature
   testPolytopeTransforms
+  testPatricia
 
 testGaugeOperators :: IO ()
 testGaugeOperators =
@@ -1109,3 +1111,36 @@ testPolytopeTransforms = do
   assertHostFalse "the showcase's Truncated Tetrahedron row (24 36 14) is not the truncated tetrahedron built (12 18 8)" ((24, 36, 14) == (12 :: Int, 18 :: Int, 8 :: Int))
   assertHostFalse "the showcase's Cuboctahedron row (12 18 8) is not the cuboctahedron built (12 24 14)" ((12, 18, 8) == (12 :: Int, 24 :: Int, 14 :: Int))
   putStrLn "polytope: truncation, rectification and the dual, built and measured: Archimedean shapes vertex-uniform, their Catalan duals face-uniform, every one Betti (1,0,1)"
+
+-- The Patricia trie of word literals (OMI.Patricia): its shape fixed by the set of words,
+-- its keys in byte order, each word's path static for a vocabulary.
+patWords :: [String]
+patWords = ["YAHWEH", "A", "AND", "YHWH", "AN", "ADONAI", "YAH", "ANT", "B"]
+
+patOf :: [String] -> Pat.Patricia String
+patOf ws = Pat.fromList [K.cons (wsnBytes w) w | w <- ws]
+
+patPath :: String -> Pat.Patricia String -> String
+patPath w t = case Pat.path (wsnBytes w) t of
+  WSN.Read bs -> map (\b -> case b of { O -> '0'; I -> '1' }) bs
+  WSN.NoRead -> "none"
+
+testPatricia :: IO ()
+testPatricia = do
+  let t = patOf patWords
+  assertEqualString "the keys are the words in byte order, a shorter word before the longer it begins"
+    (intercalate " " (DL.sort patWords)) (intercalate " " (map wsnString (Pat.keys t)))
+  assertHostTrue "every word reads back its own value"
+    (and [case Pat.lookup (wsnBytes w) t of { WSN.Read v -> v == w; WSN.NoRead -> False } | w <- patWords])
+  assertHostTrue "a word not in the trie reads nothing: ANTS, Y, YAHW, the empty word"
+    (and [case Pat.lookup (wsnBytes w) t of { WSN.NoRead -> True; _ -> False } | w <- ["ANTS", "Y", "YAHW", ""]])
+  assertHostTrue "the shape is fixed by the set of words: every order of six of them makes the same trie"
+    (and [wsnAnswer (Pat.sameShape (patOf (take 6 patWords)) (patOf ws)) == "yes" | ws <- DL.permutations (take 6 patWords)])
+  assertHostTrue "falsifier: another set of words makes another shape"
+    (wsnAnswer (Pat.sameShape (patOf patWords) (patOf ("YAG" : patWords))) == "no")
+  let yah = patPath "YAH" t
+      yahweh = patPath "YAHWEH" t
+  assertHostTrue "YAH and YAHWEH share their path to the fork where YAH ends (0) and YAHWEH goes on (1)"
+    (init yah `DL.isPrefixOf` yahweh && last yah == '0' && yahweh !! length (init yah) == '1')
+  assertHostTrue "a path is static for a vocabulary: a word added changes it only where it differs first"
+    (patPath "AND" (patOf ("YAG" : patWords)) == patPath "AND" t && patPath "YAH" (patOf ("YAG" : patWords)) /= yah)
