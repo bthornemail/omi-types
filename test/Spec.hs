@@ -32,6 +32,8 @@ import qualified OMI.Torus as T
 import qualified OMI.Types ()
 import qualified OMI.Try as Try
 import qualified OMI.WSN as WSN
+import qualified OMI.View as V
+import System.IO (IOMode(ReadMode), hGetContents, hSetBinaryMode, openFile)
 import qualified OMI.Polytope as Poly
 import qualified OMI.Patricia as Pat
 import qualified OMI.Consensus as Con
@@ -86,6 +88,7 @@ main = do
   testPatricia
   testConsensus
   testStellaOctangula
+  testView
 
 testGaugeOperators :: IO ()
 testGaugeOperators =
@@ -1230,3 +1233,76 @@ testStellaOctangula = do
       && length [l | l <- fano, withNull l == evenT] == 1)
   assertHostTrue "falsifier: the odd tetrahedron holds no Steiner triple, its XORs are not 0"
     (null [l | l <- fano, all (`elem` oddT) l])
+
+-- ---------------------------------------------------------------- views
+
+-- a file's bytes: read in binary, each Char a byte
+readBytes :: FilePath -> IO [Byte]
+readBytes f = do
+  h <- openFile f ReadMode
+  hSetBinaryMode h True
+  t <- hGetContents h
+  length t `seq` pure (map (toByte . fromEnum) t)
+
+bytesString :: [Byte] -> String
+bytesString = map (toEnum . fromByte)
+
+kindName :: V.Kind -> String
+kindName k = bytesString (V.production k)
+
+-- the elements a page leaves open, and the pieces of a tree in order
+openCount :: [V.Node] -> Int
+openCount = sum . map one
+  where
+    one (V.Leaf _) = 0
+    one (V.Element _ kids end) = openCount kids + (case end of V.Unclosed -> 1; V.Closed _ -> 0)
+
+treePieces :: [V.Node] -> [V.Piece]
+treePieces = concatMap one
+  where
+    one (V.Leaf p) = [p]
+    one (V.Element p kids end) = p : treePieces kids ++ (case end of V.Closed q -> [q]; V.Unclosed -> [])
+
+testView :: IO ()
+testView = do
+  names <- lines <$> readFile "test/data/views/pages.list"
+  grammar <- wsnParse <$> readFile "test/data/views/html.wsn"
+  pages <- mapM (\n -> (,) n <$> readBytes ("test/data/views/pages/" ++ n)) names
+  assertEqualInt "the 33 pages of unbound/HTML" 33 (length pages)
+  -- each page is its pieces, and its tree flattened, byte for byte
+  assertHostTrue "every page is its pieces, byte for byte"
+    (and [ map fromByte (concatMap V.pieceBytes (V.pieces b)) == map fromByte b | (_, b) <- pages ])
+  assertHostTrue "every page is its tree flattened, byte for byte"
+    (and [ map fromByte (V.flatten (V.tree b)) == map fromByte b | (_, b) <- pages ])
+  assertHostTrue "the tree holds the pieces in order"
+    (and [ map (bytesString . V.pieceBytes) (treePieces (V.tree b)) == map (bytesString . V.pieceBytes) (V.pieces b) | (_, b) <- pages ])
+  let ps = concat [ V.pieces b | (_, b) <- pages ]
+      count k = length [ () | p <- ps, kindName (V.pieceKind p) == k ]
+  assertHostTrue "6944 pieces, as pieces.mjs reads them: 33 DOCTYPE, 70 COMMENT, 1920 STARTTAG, 1729 ENDTAG, 3080 TEXT, 112 RAWTEXT"
+    (length ps == 6944 && map count ["DOCTYPE", "COMMENT", "STARTTAG", "ENDTAG", "TEXT", "RAWTEXT"] == [33, 70, 1920, 1729, 3080, 112])
+  -- each distinct piece but raw text accepted by html.wsn, of its own production (OMI.WSN's accepts, as zlazy)
+  let questions = DL.nub [ (kindName (V.pieceKind p), bytesString (V.pieceCast p)) | p <- ps, kindName (V.pieceKind p) /= "RAWTEXT" ]
+      ask prod s = wsnAnswer (WSN.accepts grammar (wsnBytes prod) (wsnBytes s))
+  assertEqualInt "1739 distinct pieces, as views.rc asks" 1739 (length questions)
+  assertHostTrue "html.wsn accepts every one of its own production"
+    (and [ ask prod s == "yes" | (prod, s) <- questions ])
+  assertHostTrue "falsifier: of the wrong production (a tag as TEXT, text as STARTTAG), none"
+    (and [ ask (if prod == "TEXT" then "STARTTAG" else "TEXT") s == "no" | (prod, s) <- questions ])
+  -- the cut-off page leaves its script, body and html open; every other page closes all it opens
+  let opens = [ (n, openCount (V.tree b)) | (n, b) <- pages ]
+  assertHostTrue "Tetrahedral Consciousness Universe - Interactive Browser Demo.html, cut off in a script, leaves 3 open"
+    (lookup "Tetrahedral Consciousness Universe - Interactive Browser Demo.html" opens == Just 3)
+  assertHostTrue "every other page leaves none open"
+    (and [ c == 0 | (n, c) <- opens, n /= "Tetrahedral Consciousness Universe - Interactive Browser Demo.html" ])
+  -- nothing is read before it is asked for: a page that never ends, or that fails past what is asked
+  case V.tree (wsnBytes "<p>" ++ cycle (wsnBytes "ab")) of
+    (V.Element p (V.Leaf t : _) _ : _) -> do
+      assertEqualString "an element opens on its start tag alone, the page endless" "<p>" (bytesString (V.pieceBytes p))
+      assertEqualString "and its text is read as far as asked" "ababa" (take 5 (bytesString (V.pieceBytes t)))
+    _ -> fail "an endless page has no first element"
+  case V.tree (wsnBytes "<!DOCTYPE html><html>" ++ error "read past what was asked") of
+    (V.Leaf d : V.Element h _ _ : _) -> do
+      assertEqualString "the doctype, the page failing after" "<!DOCTYPE html>" (bytesString (V.pieceBytes d))
+      assertEqualString "and the element after it" "<html>" (bytesString (V.pieceBytes h))
+    _ -> fail "a page failing after its first pieces has no first pieces"
+  putStrLn "view: 33 pages, each its 6944 pieces and its tree flattened byte for byte; html.wsn accepts all 1739 distinct pieces, none of the wrong production; the cut-off page leaves 3 open; read only as asked"
