@@ -43,6 +43,7 @@ library
       OMI.Types
       OMI.VCS
       OMI.View
+      OMI.Poly
       OMI.Wittgenstein
       OMI.WSN
   hs-source-dirs: src

@@ -33,6 +33,7 @@ import qualified OMI.Types ()
 import qualified OMI.Try as Try
 import qualified OMI.WSN as WSN
 import qualified OMI.View as V
+import qualified OMI.Poly as PL
 import System.IO (IOMode(ReadMode), hGetContents, hSetBinaryMode, openFile)
 import qualified OMI.Polytope as Poly
 import qualified OMI.Patricia as Pat
@@ -89,6 +90,7 @@ main = do
   testConsensus
   testStellaOctangula
   testView
+  testPoly
 
 testGaugeOperators :: IO ()
 testGaugeOperators =
@@ -1350,3 +1352,50 @@ testView = do
   assertHostTrue "falsifier: a quoted value as an ATTRNAME, an attribute with its = as a VALUE, none"
     (and [ ask prod c == "no" | (prod, c) <- wrongA ])
   putStrLn ("view: 33 pages, each its 6944 pieces and its tree flattened byte for byte; html.wsn accepts all 1739 distinct pieces, none of the wrong production; the cut-off page leaves 3 open; read only as asked; its 13143 spans, attributes with them, pieces.mjs's; html.wsn accepts all " ++ show (length aq) ++ " distinct attribute spans, none of " ++ show (length wrongA) ++ " asked wrongly")
+
+-- the polynomials of Metaverse Kit's poly tools as written (unbound/PLAN9 wsn/poly.wsn, poly.rules), and their cast
+testPoly :: IO ()
+testPoly = do
+  let file f = lines <$> readFile ("test/data/poly/" ++ f)
+  yes <- file "yes"
+  no <- file "no"
+  rules <- file "rules"
+  grammar <- wsnParse <$> readFile "test/data/poly/poly.wsn"
+  let reading p = case PL.readPoly (wsnBytes p) of
+        PL.Written _ -> "written"
+        PL.NotWritten -> "not written"
+        PL.OutOfOrder -> "out of order"
+        PL.Repeated -> "repeated"
+      written p = case PL.readPoly (wsnBytes p) of
+        PL.Written q -> q
+        _ -> error ("not written: " ++ p)
+      ask p = wsnAnswer (WSN.accepts grammar (wsnBytes "POLY") (wsnBytes p))
+      bit b = case b of { I -> True; O -> False }
+  assertEqualInt "175 written by the library, 4045 wrongly, 286 out of order or repeated" 4506 (length yes + length no + length rules)
+  assertHostTrue "every polynomial the library writes is read and written back byte for byte"
+    (and [ reading p == "written" && bytesString (PL.writePoly (written p)) == p | p <- yes ])
+  assertHostTrue "every one written wrongly is refused by the grammar's form"
+    (all (\p -> reading p == "not written") no)
+  assertHostTrue "every one out of order or with a term twice is refused by the rules"
+    (all (\p -> reading p `elem` ["out of order", "repeated"]) rules)
+  assertHostTrue "poly.wsn by OMI.WSN, as by zlazy: the written and the rules' accepted, the wrong refused"
+    (all ((== "yes") . ask) yes && all ((== "no") . ask) no && all ((== "yes") . ask) rules)
+  -- the cast: a term lights its light cone, the points at or above it, 2^(6 - its variables) of the 64
+  let lit = length . filter bit
+      weight t = length (filter bit (PL.termBits t))
+  assertEqualInt "64 terms, 64 pixels" 64 (length PL.allTerms)
+  assertHostTrue "each term lights the 2^(6 - k) points at or above it"
+    (and [ lit (PL.pixelate (PL.single t)) == 2 ^ (6 - weight t) | t <- PL.allTerms ])
+  assertHostTrue "and exactly those"
+    (and [ and [ bit v == and (zipWith (\a b -> not (bit a) || bit b) (PL.termBits t) (PL.termBits p)) | (p, v) <- zip PL.allTerms (PL.pixelate (PL.single t)) ] | t <- PL.allTerms ])
+  assertHostTrue "the cast reads itself back: every written polynomial from its pixels"
+    (and [ bytesString (PL.writePoly (PL.unpixelate (PL.pixelate (written p)))) == p | p <- yes ])
+  assertHostTrue "the cast of a sum is the XOR of the casts"
+    (and [ map bit (PL.pixelate (PL.plus (written a) (written b))) == zipWith (/=) (map bit (PL.pixelate (written a))) (map bit (PL.pixelate (written b))) | (a, b) <- zip yes (drop 1 yes) ])
+  let full = written (last (filter (\p -> length (filter (== '+') p) == 63) yes))
+  assertEqualInt "\"1\" lights every pixel" 64 (lit (PL.pixelate (written "1")))
+  assertHostTrue "all 64 terms together light the origin alone"
+    (map bit (PL.pixelate full) == (True : replicate 63 False))
+  assertHostTrue "falsifier: the cast is not the identity, x1 lights 32 points, not 1"
+    (lit (PL.pixelate (written "x1")) == 32)
+  putStrLn ("poly: " ++ show (length yes) ++ " written polynomials read and written back, " ++ show (length no) ++ " written wrongly refused, " ++ show (length rules) ++ " refused by the rules; poly.wsn by OMI.WSN as by zlazy; each term lights its light cone, the cast its own inverse, a sum the XOR of casts")
