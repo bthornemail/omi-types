@@ -1250,6 +1250,35 @@ bytesString = map (toEnum . fromByte)
 kindName :: V.Kind -> String
 kindName k = bytesString (V.production k)
 
+-- a page's spans with their rune offsets: a piece from where the last ended, an attribute's part from its tag's
+-- start and the runes of the tag before it
+spanOffsets :: [Byte] -> [(V.Span, Int, Int)]
+spanOffsets b = go 0 0 (V.spans b)
+  where
+    go _ _ [] = []
+    go tag next (s : rest)
+      | kindName (V.spanKind s) `elem` ["ATTR", "ATTRNAME", "VALUE"] =
+          let a = tag + length (V.spanBefore s) in (s, a, a + length (V.spanRunes s)) : go tag next rest
+      | otherwise = let e = next + length (V.spanRunes s) in (s, next, e) : go next e rest
+
+spanTable :: [Byte] -> [String]
+spanTable b = [ kindName (V.spanKind s) ++ "\t" ++ show a ++ "\t" ++ show e | (s, a, e) <- spanOffsets b ]
+
+-- each attribute part's runes are its tag's at the place the runes before it give
+attrRunesHold :: [V.Span] -> Bool
+attrRunesHold = go []
+  where
+    go _ [] = True
+    go tag (s : rest)
+      | kindName (V.spanKind s) `elem` ["ATTR", "ATTRNAME", "VALUE"] =
+          rb (V.spanRunes s) == rb (take (length (V.spanRunes s)) (drop (length (V.spanBefore s)) tag))
+            && rb (V.spanBefore s) == rb (take (length (V.spanBefore s)) tag) && go tag rest
+      | otherwise = go (V.spanRunes s) rest
+    rb = map (map fromByte . V.runeBytes)
+
+twoDigits :: Int -> String
+twoDigits i = if i < 10 then '0' : show i else show i
+
 -- the elements a page leaves open, and the pieces of a tree in order
 openCount :: [V.Node] -> Int
 openCount = sum . map one
@@ -1305,4 +1334,19 @@ testView = do
       assertEqualString "the doctype, the page failing after" "<!DOCTYPE html>" (bytesString (V.pieceBytes d))
       assertEqualString "and the element after it" "<html>" (bytesString (V.pieceBytes h))
     _ -> fail "a page failing after its first pieces has no first pieces"
-  putStrLn "view: 33 pages, each its 6944 pieces and its tree flattened byte for byte; html.wsn accepts all 1739 distinct pieces, none of the wrong production; the cut-off page leaves 3 open; read only as asked"
+  -- the spans: each piece, and each start tag's ATTR, ATTRNAME and VALUE, the same productions and rune offsets as
+  -- unbound/PLAN9's in/views/pieces.mjs (and zviews -p, checked in the guest against the same files), the same runes
+  spanFiles <- mapM (\i -> lines <$> readFile ("test/data/views/spans/" ++ twoDigits i ++ ".spans")) [1 .. length pages]
+  assertHostTrue "every page's spans are pieces.mjs's, productions and rune offsets: 13143 spans"
+    (and [ spanTable b == f | ((_, b), f) <- zip pages spanFiles ] && sum (map length spanFiles) == 13143)
+  assertHostTrue "and each attribute's part is its tag's own runes where its offsets place it (the pieces, the page's, as above)"
+    (and [ attrRunesHold (V.spans b) | (_, b) <- pages ])
+  -- the attribute spans are html.wsn's: each distinct one accepted of its own production; the falsifier, a quoted
+  -- value asked as an ATTRNAME and an attribute with its "=" asked as a VALUE, none
+  let aq = DL.nub [ (kindName (V.spanKind sp), bytesString (V.spanCast sp)) | (_, b) <- pages, sp <- V.spans b, kindName (V.spanKind sp) `elem` ["ATTR", "ATTRNAME", "VALUE"] ]
+      wrongA = [ ("ATTRNAME", c) | ("VALUE", c@(q : _)) <- aq, q `elem` "\"'" ] ++ [ ("VALUE", c) | ("ATTR", c) <- aq, '=' `elem` c ]
+  assertHostTrue "html.wsn accepts every distinct attribute span of its own production"
+    (and [ ask prod c == "yes" | (prod, c) <- aq ])
+  assertHostTrue "falsifier: a quoted value as an ATTRNAME, an attribute with its = as a VALUE, none"
+    (and [ ask prod c == "no" | (prod, c) <- wrongA ])
+  putStrLn ("view: 33 pages, each its 6944 pieces and its tree flattened byte for byte; html.wsn accepts all 1739 distinct pieces, none of the wrong production; the cut-off page leaves 3 open; read only as asked; its 13143 spans, attributes with them, pieces.mjs's; html.wsn accepts all " ++ show (length aq) ++ " distinct attribute spans, none of " ++ show (length wrongA) ++ " asked wrongly")

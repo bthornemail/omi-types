@@ -28,6 +28,7 @@ module OMI.View
   , Piece
   , Node(..)
   , End(..)
+  , Span
   , runes
   , runeBytes
   , cast
@@ -38,6 +39,12 @@ module OMI.View
   , pieceCast
   , pieceName
   , production
+  , attrs
+  , spans
+  , spanKind
+  , spanBefore
+  , spanRunes
+  , spanCast
   , tree
   , flatten
   , outline
@@ -48,7 +55,7 @@ import OMI.WSN (Answer(..))
 
 newtype Rune = Rune [Byte]
 
-data Kind = Comment | Doctype | StartTag | EndTag | Text | RawText
+data Kind = Comment | Doctype | StartTag | EndTag | Text | RawText | Attr | AttrName | Value
 
 -- | A piece: its kind, its runes, and for a tag its name cast (empty otherwise).
 data Piece = Piece Kind [Rune] [Byte]
@@ -56,6 +63,11 @@ data Piece = Piece Kind [Rune] [Byte]
 data End = Closed Piece | Unclosed
 
 data Node = Leaf Piece | Element Piece [Node] End
+
+-- | A span: its kind, the runes of its piece before it (none for a piece
+--   itself), its runes. A piece is a span, and so is each part of a start
+--   tag's attributes.
+data Span = Span Kind [Rune] [Rune]
 
 -- ---------------------------------------------------------------- bytes
 
@@ -247,6 +259,9 @@ production StartTag = [B x5 x3, B x5 x4, B x4 x1, B x5 x2, B x5 x4, B x5 x4, B x
 production EndTag = [B x4 x5, B x4 xE, B x4 x4, B x5 x4, B x4 x1, B x4 x7]
 production Text = [B x5 x4, B x4 x5, B x5 x8, B x5 x4]
 production RawText = [B x5 x2, B x4 x1, B x5 x7, B x5 x4, B x4 x5, B x5 x8, B x5 x4]
+production Attr = [B x4 x1, B x5 x4, B x5 x4, B x5 x2]
+production AttrName = [B x4 x1, B x5 x4, B x5 x4, B x5 x2, B x4 xE, B x4 x1, B x4 xD, B x4 x5]
+production Value = [B x5 x6, B x4 x1, B x4 xC, B x5 x5, B x4 x5]
 
 commentOpen, commentClose, doctypeOpen :: [Byte]
 commentOpen = [lt, bang, dash, dash]
@@ -404,6 +419,81 @@ pieces bs = go (runes bs)
     take4 xs = xs
     drop4 (_ : _ : _ : _ : xs) = xs
     drop4 _ = []
+
+-- ---------------------------------------------------------------- attributes
+
+spanKind :: Span -> Kind
+spanKind (Span k _ _) = k
+
+spanBefore :: Span -> [Rune]
+spanBefore (Span _ b _) = b
+
+spanRunes :: Span -> [Rune]
+spanRunes (Span _ _ rs) = rs
+
+spanCast :: Span -> [Byte]
+spanCast s = castAll (spanRunes s)
+
+-- | A start tag's attributes, by html.wsn: STARTTAG = "<" NAME { SPACES ATTR }
+--   [ SPACES ] [ "/" ] ">", ATTR = ATTRNAME [ [ SPACES ] "=" [ SPACES ] VALUE ],
+--   VALUE a quoted run (its quotes in it) or UQ { UQ }, read over the cast:
+--   each attribute an Attr span, its AttrName, and its Value when it has one.
+--   Any other piece has none.
+attrs :: Piece -> [Span]
+attrs (Piece StartTag (l : more) name) = let (nm, rest) = splitLike name more in go (l : nm) rest
+  where
+    splitLike [] xs = ([], xs)
+    splitLike (_ : ns) (x : xs) = let (a, b) = splitLike ns xs in (x : a, b)
+    splitLike _ [] = ([], [])
+    go before rest =
+      let (s, r1) = while' spaceR rest
+      in case ends r1 of
+        Yes -> []
+        No -> case s of
+          [] -> []
+          _ -> let (nm, r2) = while' anR r1 in case nm of
+            [] -> []
+            _ ->
+              let at = append before s
+                  (s2, r3) = while' spaceR r2
+              in case r3 of
+                (e : r4) -> case is eq e of
+                  Yes ->
+                    let (s3, r5) = while' spaceR r4
+                        (v, r6) = value r5
+                        lead = append nm (append s2 (e : s3))
+                        whole = append lead v
+                    in Span Attr at whole : Span AttrName at nm : Span Value (append at lead) v : go (append at whole) r6
+                  No -> bare at nm r2
+                [] -> bare at nm r2
+    bare at nm r = Span Attr at nm : Span AttrName at nm : go (append at nm) r
+    ends (r : rest) = either' (is gt r) (both (is slash r) (case rest of (g : _) -> is gt g; [] -> No))
+    ends [] = No
+    spaceR r = eqByte (cast r) space
+    anR r = not' (isIn (cast r) [space, eq, dq, sq, slash, gt])
+    uqR r = not' (isIn (cast r) [space, eq, dq, sq, lt, gt])
+    value (q : r) = case either' (is dq q) (is sq q) of
+      Yes -> let (a, b) = upToQ (cast q) r in (q : a, b)
+      No -> while' uqR (q : r)
+    value [] = ([], [])
+    upToQ _ [] = ([], [])
+    upToQ c (r : rest) = case eqByte c (cast r) of
+      Yes -> ([r], rest)
+      No -> let (a, b) = upToQ c rest in (r : a, b)
+attrs _ = []
+
+while' :: (Rune -> Answer) -> [Rune] -> ([Rune], [Rune])
+while' _ [] = ([], [])
+while' f (r : rest) = case f r of
+  Yes -> let (a, b) = while' f rest in (r : a, b)
+  No -> ([], r : rest)
+
+-- | The page's spans in page order: each piece, a start tag followed by its
+--   attributes' spans.
+spans :: [Byte] -> [Span]
+spans bs = concatL (mapL one (pieces bs))
+  where
+    one p = Span (pieceKind p) [] (pieceRunes p) : attrs p
 
 -- ---------------------------------------------------------------- the tree
 
