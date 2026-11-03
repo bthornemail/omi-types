@@ -1398,4 +1398,17 @@ testPoly = do
     (map bit (PL.pixelate full) == (True : replicate 63 False))
   assertHostTrue "falsifier: the cast is not the identity, x1 lights 32 points, not 1"
     (lit (PL.pixelate (written "x1")) == 32)
-  putStrLn ("poly: " ++ show (length yes) ++ " written polynomials read and written back, " ++ show (length no) ++ " written wrongly refused, " ++ show (length rules) ++ " refused by the rules; poly.wsn by OMI.WSN as by zlazy; each term lights its light cone, the cast its own inverse, a sum the XOR of casts")
+  -- PIXELATE, the pixels and the spectrum together, as unbound/PLAN9's in/pixelate files them and zpixelate gives them
+  polys <- file "pixelate.polys"
+  cast <- file "pixelate.cast"
+  let castLine p = case PL.readPoly (wsnBytes p) of
+        PL.Written q -> map (\b -> if bit b then '1' else '0') (PL.pixelate q) ++ "\t" ++ unwords [ show (64 - 2 * length (filter bit d)) | d <- PL.spectrum q ]
+        r -> case r of { PL.NotWritten -> "not written"; PL.OutOfOrder -> "out of order"; _ -> "repeated" }
+  assertEqualInt "4506 lines" 4506 (length polys)
+  assertHostTrue "every line's pixels and spectrum, or its refusal, as filed (zpixelate's in the guest)"
+    (map castLine polys == cast)
+  assertHostTrue "a linear function is one bin: x1 + x2 all of 64 in bin 3"
+    ((words (drop 65 (castLine "x1+x2")) !! 3) == "64" && length (filter (/= "0") (words (drop 65 (castLine "x1+x2")))) == 1)
+  assertHostTrue "x1*x2 + x3*x4 + x5*x6 is flat, every bin 8 or -8"
+    (all (`elem` ["8", "-8"]) (words (drop 65 (castLine "x1*x2+x3*x4+x5*x6"))))
+  putStrLn ("poly: " ++ show (length yes) ++ " written polynomials read and written back, " ++ show (length no) ++ " written wrongly refused, " ++ show (length rules) ++ " refused by the rules; poly.wsn by OMI.WSN as by zlazy; each term lights its light cone, the cast its own inverse, a sum the XOR of casts; PIXELATE, pixels and spectrum, on all 4506 lines as filed")

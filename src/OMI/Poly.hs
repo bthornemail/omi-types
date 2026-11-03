@@ -18,6 +18,13 @@
 --   its terms' cones, so a pixel is the parity of the terms below it.
 --   'unpixelate' reads the terms back by the same rule downward (over F2 the
 --   cast is its own inverse).
+--
+--   And its spectrum, the two together (the author: "both together its like
+--   the pi being resolved from the inceide in the omi pi proof, its casual"):
+--   for each of the 64 linear functions a.x, the points where the pixels and
+--   it differ. Bin a of the Walsh-Hadamard transform is 64 - 2 x their number,
+--   its sign a parity phase; the number is left to a projection, as the omi pi
+--   proof leaves pi to its limit, and the spectrum stays bits.
 module OMI.Poly
   ( Term
   , Poly
@@ -31,6 +38,8 @@ module OMI.Poly
   , plus
   , pixelate
   , unpixelate
+  , linear
+  , spectrum
   ) where
 
 import OMI.Kernel
@@ -263,3 +272,20 @@ unpixelate px = Poly (keep allTerms)
       O -> keep rest
     zip' (a : as) (b : bs) = (a, b) : zip' as bs
     zip' _ _ = []
+
+-- | The pixels of the linear function a.x: the parity of the variables a and
+--   the point share.
+linear :: Term -> [Bit]
+linear a = mapL (\p -> parity (zipB (termBits a) (termBits p))) allTerms
+  where
+    zipB (x : xs) (y : ys) = andB x y : zipB xs ys
+    zipB _ _ = []
+
+-- | For each linear function, in the terms' order, the points where the
+--   pixels differ from it.
+spectrum :: Poly -> [[Bit]]
+spectrum q = mapL (\a -> zipX px (linear a)) allTerms
+  where
+    px = pixelate q
+    zipX (x : xs) (y : ys) = xor x y : zipX xs ys
+    zipX _ _ = []
